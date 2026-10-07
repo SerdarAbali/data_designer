@@ -1,0 +1,7 @@
+alembic==1.16.1
+argon2-cffi==23.1.0
+fastapi==0.115.12
+pydantic-settings==2.9.1
+psycopg[binary]==3.2.9
+sqlalchemy==2.0.41
+uvicorn[standard]==0.34.3

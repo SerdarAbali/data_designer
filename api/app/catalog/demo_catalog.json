@@ -1,0 +1,67 @@
+[
+  {
+    "name": "Salesforce",
+    "kind": "CRM",
+    "description": "Example customer relationship management system",
+    "objects": [
+      {
+        "name": "Account",
+        "label": "Account",
+        "fields": [
+          {"name": "Id", "label": "ID", "data_type": "string"},
+          {"name": "Name", "label": "Name", "data_type": "string"},
+          {"name": "Industry", "label": "Industry", "data_type": "string"},
+          {"name": "AnnualRevenue", "label": "Annual revenue", "data_type": "number"}
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Meta",
+    "kind": "advertising",
+    "description": "Example advertising platform",
+    "objects": [
+      {
+        "name": "Campaign",
+        "label": "Campaign",
+        "fields": [
+          {"name": "id", "label": "Campaign ID", "data_type": "string"},
+          {"name": "name", "label": "Name", "data_type": "string"},
+          {"name": "spend", "label": "Spend", "data_type": "number"}
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Mailchimp",
+    "kind": "marketing",
+    "description": "Example email marketing system",
+    "objects": [
+      {
+        "name": "Subscriber",
+        "label": "Subscriber",
+        "fields": [
+          {"name": "email", "label": "Email", "data_type": "string"},
+          {"name": "first_name", "label": "First name", "data_type": "string"},
+          {"name": "last_name", "label": "Last name", "data_type": "string"}
+        ]
+      }
+    ]
+  },
+  {
+    "name": "SAP",
+    "kind": "ERP",
+    "description": "Example enterprise resource planning system",
+    "objects": [
+      {
+        "name": "Customer",
+        "label": "Customer",
+        "fields": [
+          {"name": "CustomerID", "label": "Customer ID", "data_type": "string"},
+          {"name": "Name", "label": "Name", "data_type": "string"},
+          {"name": "CountryCode", "label": "Country code", "data_type": "string"}
+        ]
+      }
+    ]
+  }
+]

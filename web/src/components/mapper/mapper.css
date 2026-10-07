@@ -1,0 +1,172 @@
+/* Mapper Edge Styles */
+.mapper-edge-label {
+  transition: all 0.2s ease;
+}
+
+.mapper-edge-label.selected {
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+  z-index: 10;
+}
+
+/* System Node Card Styles */
+.system-node-card {
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.system-node-card.selected {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.system-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.system-node-fields {
+  background: #f9fafb;
+  border-radius: 6px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.system-node-fields ul {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db #f3f4f6;
+}
+
+.system-node-fields ul::-webkit-scrollbar {
+  width: 4px;
+}
+
+.system-node-fields ul::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 2px;
+}
+
+.system-node-fields ul::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 2px;
+}
+
+.system-node-fields ul::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Flow Handle Styles */
+.flow-handle {
+  width: 12px;
+  height: 12px;
+  border: 2px solid white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.flow-handle:hover {
+  width: 14px;
+  height: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.flow-handle.connectindicator {
+  background: #fbbf24 !important;
+}
+
+/* Outbound connection handles (Blue) */
+.react-flow__handle[data-type="source"][style*="background: rgb(37, 99, 235)"],
+.react-flow__handle[style*="background: #2563eb"] {
+  background: #2563eb !important;
+  cursor: pointer;
+}
+
+.react-flow__handle[data-type="source"][style*="background: rgb(37, 99, 235)"]:hover,
+.react-flow__handle[style*="background: #2563eb"]:hover {
+  background: #1d4ed8 !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4) !important;
+}
+
+/* Inbound connection handles (Green) */
+.react-flow__handle[data-type="target"][style*="background: rgb(16, 185, 129)"],
+.react-flow__handle[style*="background: #10b981"] {
+  background: #10b981 !important;
+  cursor: pointer;
+}
+
+.react-flow__handle[data-type="target"][style*="background: rgb(16, 185, 129)"]:hover,
+.react-flow__handle[style*="background: #10b981"]:hover {
+  background: #059669 !important;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4) !important;
+}
+
+/* Animation Keyframes - Already defined in MapperEdge component */
+/* These are duplicated here for CSS file reference */
+@keyframes dash-animation {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+@keyframes dash-animation-reverse {
+  to {
+    stroke-dashoffset: 12;
+  }
+}
+
+/* Outbound edge styling */
+.react-flow__edge[data-direction="outbound"] {
+  stroke: #2563eb;
+}
+
+/* Inbound edge styling */
+.react-flow__edge[data-direction="inbound"] {
+  stroke: #10b981;
+}
+
+/* Selected edge indicator */
+.react-flow__edge.selected {
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.2));
+}
+
+/* Connection status indicators */
+.react-flow__edge[data-status="draft"] {
+  opacity: 0.6;
+  stroke-dasharray: 8 4;
+}
+
+.react-flow__edge[data-status="attention"] {
+  filter: drop-shadow(0 0 3px rgba(239, 68, 68, 0.5));
+}
+
+.react-flow__edge[data-status="healthy"] {
+  filter: drop-shadow(0 0 2px rgba(16, 185, 129, 0.3));
+}
+
+/* Responsive handle positioning */
+@media (max-width: 768px) {
+  .flow-handle {
+    width: 10px;
+    height: 10px;
+  }
+
+  .flow-handle:hover {
+    width: 12px;
+    height: 12px;
+  }
+
+  .system-node-card {
+    min-width: 180px;
+    max-width: 240px;
+    padding: 10px;
+  }
+
+  .system-node-card h3 {
+    font-size: 13px;
+  }
+
+  .system-node-fields {
+    font-size: 11px;
+  }
+}
