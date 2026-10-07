@@ -7,6 +7,7 @@ from app.catalog.routes import router as catalog_router
 from app.db import check_database
 from app.integrations.routes import router as integrations_router
 from app.scenarios.routes import router as scenarios_router
+from app.workspaces.routes import router as workspaces_router
 
 app = FastAPI(title="Data Designer API", version="0.1.0-alpha")
 
@@ -28,6 +29,7 @@ app.include_router(auth_router)
 app.include_router(catalog_router)
 app.include_router(integrations_router)
 app.include_router(scenarios_router)
+app.include_router(workspaces_router)
 
 
 @app.get("/health", tags=["health"])

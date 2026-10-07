@@ -4,6 +4,8 @@ import InspectorTabs, { type InspectorTab } from "./components/catalog/Inspector
 import EnterpriseLandscape from "./EnterpriseLandscape";
 import IntegrationWorkspace from "./IntegrationWorkspace";
 import type { ScenarioPhase } from "./scenarioModel";
+import WorkspaceSwitcher from "./components/workspaces/WorkspaceSwitcher";
+import ArchiveImpactDialog, { type ReferencingIntegration } from "./components/catalog/ArchiveImpactDialog";
 
 type System = {
   id: string;
@@ -72,6 +74,7 @@ class ApiRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly detail?: unknown,
   ) {
     super(message);
   }
@@ -127,7 +130,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
-    throw new ApiRequestError(detailMessage(body.detail), response.status);
+    throw new ApiRequestError(detailMessage(body.detail), response.status, body.detail);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -208,6 +211,14 @@ export default function CatalogWorkspace({
   const [loadingFields, setLoadingFields] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [archiveImpactState, setArchiveImpactState] = React.useState<{
+    path: string;
+    itemName: string;
+    itemType: "system" | "object" | "field";
+    integrations: ReferencingIntegration[];
+    refresh: () => Promise<void>;
+  } | null>(null);
+  const [archiveCascading, setArchiveCascading] = React.useState(false);
   const systemsRequest = React.useRef(0);
   const objectsRequest = React.useRef(0);
   const fieldsRequest = React.useRef(0);
@@ -483,12 +494,44 @@ export default function CatalogWorkspace({
     });
   }
 
-  async function archiveItem(path: string, itemName: string, refresh: () => Promise<void>) {
+  async function archiveItem(
+    path: string,
+    itemName: string,
+    refresh: () => Promise<void>,
+    itemType: "system" | "object" | "field" = "system",
+  ) {
     if (!window.confirm(`Archive ${itemName}? It can be restored through the API.`)) return;
-    await runMutation(async () => {
+    setError("");
+    setSaving(true);
+    try {
       await api<void>(path, { method: "DELETE" });
       await refresh();
-    });
+    } catch (caught) {
+      if (
+        caught instanceof ApiRequestError &&
+        caught.status === 409 &&
+        caught.detail &&
+        typeof caught.detail === "object" &&
+        (caught.detail as { code?: string }).code === "catalog_item_in_use"
+      ) {
+        const rawDetail = caught.detail as {
+          code: string;
+          message: string;
+          integrations: ReferencingIntegration[];
+        };
+        setArchiveImpactState({
+          path,
+          itemName,
+          itemType,
+          integrations: rawDetail.integrations ?? [],
+          refresh,
+        });
+      } else {
+        setError(caught instanceof Error ? caught.message : "Archive failed.");
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function reorder(
@@ -535,6 +578,24 @@ export default function CatalogWorkspace({
           </p>
           </div>
         </div>
+        <WorkspaceSwitcher
+          currentWorkspaceName={tenantName}
+          csrfToken={csrfToken}
+          onSwitch={() => {
+            // Reset catalog state and reload everything for the newly active workspace
+            setSystems([]);
+            setObjects([]);
+            setFields([]);
+            setObjectFieldCounts({});
+            setSystemId("");
+            setObjectId("");
+            setFieldId("");
+            setExpandedSystemId("");
+            setExpandedObjectId("");
+            setError("");
+            void refreshSystems();
+          }}
+        />
         <div className="workspace-header-actions">
           <nav className="workspace-nav" aria-label="Workspace">
             <button
@@ -765,11 +826,11 @@ export default function CatalogWorkspace({
           onCloseModal={() => setCatalogModal(null)}
           onArchive={(kind) => {
             if (kind === "system" && selectedSystem) {
-              void archiveItem(`/api/catalog/systems/${selectedSystem.id}`, selectedSystem.name, () => refreshSystems());
+              void archiveItem(`/api/catalog/systems/${selectedSystem.id}`, selectedSystem.name, () => refreshSystems(), "system");
             } else if (kind === "object" && selectedObject) {
-              void archiveItem(`/api/catalog/objects/${selectedObject.id}`, selectedObject.label, () => refreshObjects(selectedSystem?.id ?? ""));
+              void archiveItem(`/api/catalog/objects/${selectedObject.id}`, selectedObject.label, () => refreshObjects(selectedSystem?.id ?? ""), "object");
             } else if (kind === "field" && selectedField) {
-              void archiveItem(`/api/catalog/fields/${selectedField.id}`, selectedField.label, () => refreshFields(selectedObject?.id ?? ""));
+              void archiveItem(`/api/catalog/fields/${selectedField.id}`, selectedField.label, () => refreshFields(selectedObject?.id ?? ""), "field");
             }
           }}
         />
@@ -1147,6 +1208,35 @@ export default function CatalogWorkspace({
         )}
       </div>
       </>
+      )}
+      {archiveImpactState && (
+        <ArchiveImpactDialog
+          itemName={archiveImpactState.itemName}
+          itemType={archiveImpactState.itemType}
+          integrations={archiveImpactState.integrations}
+          loading={archiveCascading}
+          onCancel={() => setArchiveImpactState(null)}
+          onOpenIntegration={(id) => {
+            setArchiveImpactState(null);
+            setIntegrationToOpen(id);
+            setIntegrationPhaseToOpen(undefined);
+            setQuickAddSystemId("");
+            setActiveView("integrations");
+          }}
+          onConfirmCascade={async () => {
+            setArchiveCascading(true);
+            try {
+              await api<void>(`${archiveImpactState.path}?cascade=true`, { method: "DELETE" });
+              await archiveImpactState.refresh();
+              setArchiveImpactState(null);
+            } catch (caught) {
+              setError(caught instanceof Error ? caught.message : "Cascade archive failed.");
+              setArchiveImpactState(null);
+            } finally {
+              setArchiveCascading(false);
+            }
+          }}
+        />
       )}
     </main>
   );

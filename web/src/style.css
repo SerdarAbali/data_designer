@@ -6225,3 +6225,274 @@ select:focus-visible {
     position: static;
   }
 }
+
+/* ================================================================
+   Workspace Switcher dropdown
+   ================================================================ */
+
+.workspace-switcher {
+  position: relative;
+  font-size: 0.85rem;
+  color: #344255;
+  flex-shrink: 0;
+}
+
+.ws-switcher-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid #dce3ea;
+  background: #f4f7fa;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.ws-switcher-trigger:hover {
+  background: #e8eef5;
+  border-color: #c4cfd9;
+}
+
+.workspace-switcher > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ws-switcher-icon {
+  font-size: 1rem;
+  line-height: 1;
+  color: #254d6e;
+}
+
+.ws-switcher-label {
+  display: grid;
+  gap: 1px;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.ws-switcher-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-switcher-label small {
+  color: var(--color-muted);
+  font-size: 0.65rem;
+  font-weight: 450;
+}
+
+.ws-switcher-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  min-width: 280px;
+  max-width: 340px;
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  padding: 10px 0 6px;
+}
+
+.ws-switcher-section-label {
+  margin: 0 0 4px;
+  padding: 0 14px 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #8596a7;
+  border-bottom: 1px solid #f0f3f6;
+}
+
+.ws-switcher-loading,
+.ws-switcher-error {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: #5c6878;
+}
+
+.ws-switcher-error {
+  color: #b91c1c;
+}
+
+.ws-switcher-entry {
+  border-bottom: 1px solid #f5f7fa;
+}
+
+.ws-switcher-entry:last-of-type {
+  border-bottom: none;
+}
+
+.ws-switcher-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px 4px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: #1f2937;
+  transition: background 0.1s;
+}
+
+.ws-switcher-row:hover:not(:disabled) {
+  background: #f4f7fa;
+}
+
+.ws-switcher-row.ws-active {
+  cursor: default;
+  font-weight: 650;
+}
+
+.ws-active-dot {
+  font-size: 0.6rem;
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.ws-switcher-row:not(.ws-active) .ws-active-dot {
+  color: #c9d3dc;
+}
+
+.ws-row-info {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ws-switcher-row small {
+  font-size: 0.68rem;
+  color: var(--color-muted);
+  font-weight: 450;
+}
+
+.ws-switching-spinner {
+  font-size: 0.8rem;
+  color: #2563eb;
+  animation: pulse 1s infinite;
+}
+
+.ws-row-actions {
+  display: flex;
+  gap: 4px;
+  padding: 2px 14px 6px 30px;
+}
+
+.ws-action-btn {
+  padding: 2px 7px;
+  border: 1px solid #e0e6ed;
+  border-radius: 5px;
+  background: white;
+  font-size: 0.7rem;
+  color: #4a6380;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.ws-action-btn:hover:not(:disabled) {
+  background: #eef3f8;
+  border-color: #c4cfd9;
+}
+
+.ws-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Inline fork form */
+.ws-fork-inline {
+  padding: 8px 14px 10px;
+}
+
+.ws-fork-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  box-sizing: border-box;
+}
+
+.ws-fork-error {
+  margin: 4px 0 0;
+  font-size: 0.75rem;
+  color: #b91c1c;
+}
+
+.ws-fork-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ws-fork-confirm {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: white;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ws-fork-confirm:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ws-fork-cancel {
+  padding: 4px 10px;
+  border: 1px solid #e0e6ed;
+  border-radius: 6px;
+  background: white;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.ws-switcher-footer {
+  padding: 8px 14px 4px;
+  border-top: 1px solid #f0f3f6;
+  margin-top: 4px;
+}
+
+.ws-new-btn {
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px dashed #c4cfd9;
+  border-radius: 7px;
+  background: #f9fbfc;
+  font-size: 0.8rem;
+  color: #2563eb;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.ws-new-btn:hover {
+  background: #eff6ff;
+  border-color: #2563eb;
+}
+
+/* ArchiveImpactDialog uses existing .catalog-modal-backdrop / .catalog-modal */
+.impact-dialog-modal {
+  max-width: 480px;
+}

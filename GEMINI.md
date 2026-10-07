@@ -46,3 +46,4 @@ This document defines non-negotiable guidelines for all AI agents working on thi
 - Authoritative specification: `MASTER-SPEC.md`
 - Implemented capabilities: `SYSTEM_CAPABILITIES.md`
 - User guide: `docs/user-guide.md`
+

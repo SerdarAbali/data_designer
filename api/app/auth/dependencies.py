@@ -80,7 +80,20 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
-    tenant = db.get(Tenant, user.tenant_id)
+    target_tenant_id = auth_session.active_tenant_id or user.tenant_id
+    tenant = db.scalar(
+        select(Tenant).where(
+            Tenant.id == target_tenant_id,
+            Tenant.deleted_at.is_(None),
+        )
+    )
+    if tenant is None and target_tenant_id != user.tenant_id:
+        tenant = db.scalar(
+            select(Tenant).where(
+                Tenant.id == user.tenant_id,
+                Tenant.deleted_at.is_(None),
+            )
+        )
     if tenant is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -88,7 +101,7 @@ def get_current_user(
         )
     return AuthenticatedUser(
         id=user.id,
-        tenant_id=user.tenant_id,
+        tenant_id=tenant.id,
         email=user.email,
         tenant_name=tenant.name,
     )

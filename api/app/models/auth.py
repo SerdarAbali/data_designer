@@ -20,11 +20,16 @@ class Tenant(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    owner_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    users: Mapped[list["User"]] = relationship(back_populates="tenant")
+    users: Mapped[list["User"]] = relationship(back_populates="tenant", foreign_keys="User.tenant_id")
 
 
 class User(Base):
@@ -45,7 +50,11 @@ class User(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
-    tenant: Mapped[Tenant] = relationship(back_populates="users")
+    tenant: Mapped[Tenant] = relationship(
+        "Tenant",
+        back_populates="users",
+        foreign_keys=[tenant_id],
+    )
 
 
 class AuthSession(Base):
@@ -58,6 +67,9 @@ class AuthSession(Base):
     user_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    active_tenant_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True
+    )
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     csrf_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -66,4 +78,5 @@ class AuthSession(Base):
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    user: Mapped[User] = relationship()
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+    active_tenant: Mapped[Tenant | None] = relationship(foreign_keys=[active_tenant_id])

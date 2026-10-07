@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from app.models import (
     CatalogObject,
     CatalogSystem,
     Integration,
+    IntegrationDependency,
     IntegrationFieldRef,
 )
 
@@ -143,6 +144,30 @@ def raise_if_integration_references(
         )
 
 
+def archive_integrations_for_cascade(
+    db: Session,
+    tenant_id: UUID,
+    integrations: list[Integration],
+    now: datetime,
+) -> None:
+    for integration in integrations:
+        integration.deleted_at = integration.updated_at = now
+        integration.revision += 1
+        db.execute(
+            delete(IntegrationFieldRef).where(
+                IntegrationFieldRef.integration_id == integration.id,
+                IntegrationFieldRef.tenant_id == tenant_id,
+            )
+        )
+        db.execute(
+            delete(IntegrationDependency).where(
+                IntegrationDependency.tenant_id == tenant_id,
+                (IntegrationDependency.upstream_integration_id == integration.id)
+                | (IntegrationDependency.downstream_integration_id == integration.id),
+            )
+        )
+
+
 @router.get("/systems", response_model=list[SystemResponse])
 def list_systems(
     limit: int = Query(default=100, ge=1, le=500),
@@ -225,6 +250,7 @@ def update_system(
 def archive_system(
     system_id: UUID,
     request: Request,
+    cascade: bool = Query(default=False),
     auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
     user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
     db: Session = Depends(get_session),  # noqa: B008
@@ -241,8 +267,23 @@ def archive_system(
     )
     if system is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
-    raise_if_integration_references(db, user.tenant_id, system_id=system.id)
     now = archive_timestamp()
+    if cascade:
+        referencing_integrations = list(
+            db.scalars(
+                select(Integration)
+                .where(
+                    Integration.tenant_id == user.tenant_id,
+                    Integration.deleted_at.is_(None),
+                    (Integration.source_system_id == system.id)
+                    | (Integration.target_system_id == system.id),
+                )
+                .with_for_update()
+            )
+        )
+        archive_integrations_for_cascade(db, user.tenant_id, referencing_integrations, now)
+    else:
+        raise_if_integration_references(db, user.tenant_id, system_id=system.id)
     system.deleted_at = system.updated_at = now
     objects = list(
         db.scalars(
@@ -381,6 +422,7 @@ def update_object(
 def archive_object(
     object_id: UUID,
     request: Request,
+    cascade: bool = Query(default=False),
     auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
     user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
     db: Session = Depends(get_session),  # noqa: B008
@@ -397,8 +439,23 @@ def archive_object(
     )
     if obj is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
-    raise_if_integration_references(db, user.tenant_id, object_id=obj.id)
     now = archive_timestamp()
+    if cascade:
+        referencing_integrations = list(
+            db.scalars(
+                select(Integration)
+                .where(
+                    Integration.tenant_id == user.tenant_id,
+                    Integration.deleted_at.is_(None),
+                    (Integration.source_object_id == obj.id)
+                    | (Integration.target_object_id == obj.id),
+                )
+                .with_for_update()
+            )
+        )
+        archive_integrations_for_cascade(db, user.tenant_id, referencing_integrations, now)
+    else:
+        raise_if_integration_references(db, user.tenant_id, object_id=obj.id)
     obj.deleted_at = obj.updated_at = now
     for field in db.scalars(
         select(CatalogField).where(
