@@ -12,11 +12,12 @@ from app.auth.dependencies import (
     require_csrf,
 )
 from app.db import get_session
-from app.models import AuthSession, Tenant, User
+from app.models import AuthSession, Tenant, User, Workspace
 from app.workspaces.schemas import (
     WorkspaceCreate,
     WorkspaceFork,
     WorkspaceResponse,
+    WorkspaceUpdate,
 )
 from app.workspaces.service import (
     export_workspace_bundle,
@@ -58,6 +59,33 @@ def _user_can_access_workspace(db: Session, user: AuthenticatedUser, tenant_id: 
     return tenant
 
 
+def _ensure_workspace_entity(
+    db: Session,
+    tenant: Tenant,
+    disciplines: list[str] | None = None,
+) -> Workspace:
+    ws = db.scalar(
+        select(Workspace).where(
+            Workspace.id == tenant.id,
+            Workspace.deleted_at.is_(None),
+        )
+    )
+    if ws is None:
+        ws = Workspace(
+            id=tenant.id,
+            tenant_id=tenant.id,
+            name=tenant.name,
+            description=tenant.description,
+            disciplines=disciplines if disciplines is not None else ["enterprise", "information", "solution", "integration"],
+        )
+        db.add(ws)
+        db.flush()
+    elif disciplines is not None:
+        ws.disciplines = disciplines
+        db.flush()
+    return ws
+
+
 @router.get("", response_model=list[WorkspaceResponse])
 def list_workspaces(
     user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
@@ -80,12 +108,14 @@ def list_workspaces(
 
     results: list[WorkspaceResponse] = []
     for t in tenants:
+        ws = _ensure_workspace_entity(db, t)
         s_count, c_count, sc_count = get_workspace_counts(db, t.id)
         results.append(
             WorkspaceResponse(
                 id=t.id,
                 name=t.name,
                 description=t.description,
+                disciplines=ws.disciplines,
                 created_at=t.created_at,
                 is_active=(t.id == user.tenant_id),
                 systems_count=s_count,
@@ -93,6 +123,7 @@ def list_workspaces(
                 scenarios_count=sc_count,
             )
         )
+    db.commit()
     return results
 
 
@@ -127,6 +158,8 @@ def create_workspace(
     db.add(new_tenant)
     db.flush()
 
+    new_ws = _ensure_workspace_entity(db, new_tenant, disciplines=payload.disciplines)
+
     if payload.seed_demo_data:
         seed_demo_data_for_tenant(db, new_tenant.id)
 
@@ -134,14 +167,73 @@ def create_workspace(
     auth_session.active_tenant_id = new_tenant.id
     db.commit()
     db.refresh(new_tenant)
+    db.refresh(new_ws)
 
     s_count, c_count, sc_count = get_workspace_counts(db, new_tenant.id)
     return WorkspaceResponse(
         id=new_tenant.id,
         name=new_tenant.name,
         description=new_tenant.description,
+        disciplines=new_ws.disciplines,
         created_at=new_tenant.created_at,
         is_active=True,
+        systems_count=s_count,
+        contracts_count=c_count,
+        scenarios_count=sc_count,
+    )
+
+
+@router.patch("/{workspace_id}", response_model=WorkspaceResponse)
+def update_workspace(
+    workspace_id: UUID,
+    payload: WorkspaceUpdate,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> WorkspaceResponse:
+    require_csrf(request, auth_session)
+    tenant = _user_can_access_workspace(db, user, workspace_id)
+    ws = _ensure_workspace_entity(db, tenant)
+
+    if payload.name is not None and payload.name.strip():
+        new_name = payload.name.strip()
+        if new_name != ws.name:
+            existing = db.scalar(
+                select(Tenant).where(
+                    Tenant.name == new_name,
+                    Tenant.id != tenant.id,
+                    Tenant.deleted_at.is_(None),
+                )
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"A workspace named '{new_name}' already exists",
+                )
+            tenant.name = new_name
+            ws.name = new_name
+
+    if payload.description is not None:
+        tenant.description = payload.description.strip() if payload.description else None
+        ws.description = tenant.description
+
+    if payload.disciplines is not None:
+        ws.disciplines = payload.disciplines
+
+    ws.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(ws)
+    db.refresh(tenant)
+
+    s_count, c_count, sc_count = get_workspace_counts(db, tenant.id)
+    return WorkspaceResponse(
+        id=tenant.id,
+        name=tenant.name,
+        description=tenant.description,
+        disciplines=ws.disciplines,
+        created_at=tenant.created_at,
+        is_active=(tenant.id == user.tenant_id),
         systems_count=s_count,
         contracts_count=c_count,
         scenarios_count=sc_count,
@@ -158,6 +250,7 @@ def switch_workspace(
 ) -> WorkspaceResponse:
     require_csrf(request, auth_session)
     tenant = _user_can_access_workspace(db, user, workspace_id)
+    ws = _ensure_workspace_entity(db, tenant)
     auth_session.active_tenant_id = tenant.id
     db.commit()
 
@@ -166,6 +259,7 @@ def switch_workspace(
         id=tenant.id,
         name=tenant.name,
         description=tenant.description,
+        disciplines=ws.disciplines,
         created_at=tenant.created_at,
         is_active=True,
         systems_count=s_count,
@@ -209,16 +303,22 @@ def fork_workspace_endpoint(
 
     fork_workspace(db, source_tenant.id, new_tenant)
 
+    source_ws = _ensure_workspace_entity(db, source_tenant)
+    fork_disciplines = payload.disciplines if payload.disciplines is not None else source_ws.disciplines
+    fork_ws = _ensure_workspace_entity(db, new_tenant, disciplines=fork_disciplines)
+
     # Switch session to new fork
     auth_session.active_tenant_id = new_tenant.id
     db.commit()
     db.refresh(new_tenant)
+    db.refresh(fork_ws)
 
     s_count, c_count, sc_count = get_workspace_counts(db, new_tenant.id)
     return WorkspaceResponse(
         id=new_tenant.id,
         name=new_tenant.name,
         description=new_tenant.description,
+        disciplines=fork_ws.disciplines,
         created_at=new_tenant.created_at,
         is_active=True,
         systems_count=s_count,
@@ -270,15 +370,20 @@ def import_workspace_endpoint(
 
     import_workspace_bundle(db, new_tenant, payload)
 
+    import_disciplines = ws_info.get("disciplines") or ["enterprise", "information", "solution", "integration"]
+    imported_ws = _ensure_workspace_entity(db, new_tenant, disciplines=import_disciplines)
+
     auth_session.active_tenant_id = new_tenant.id
     db.commit()
     db.refresh(new_tenant)
+    db.refresh(imported_ws)
 
     s_count, c_count, sc_count = get_workspace_counts(db, new_tenant.id)
     return WorkspaceResponse(
         id=new_tenant.id,
         name=new_tenant.name,
         description=new_tenant.description,
+        disciplines=imported_ws.disciplines,
         created_at=new_tenant.created_at,
         is_active=True,
         systems_count=s_count,

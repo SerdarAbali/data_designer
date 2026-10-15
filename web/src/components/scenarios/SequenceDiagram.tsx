@@ -4,10 +4,10 @@ import type { ScenarioDocument, ScenarioPhase, StepOutcome } from "../../scenari
 import { layoutSequence, SEQUENCE_METRICS, type LayoutMessage } from "../../scenarioSequenceLayout";
 
 const PHASE_COLORS: Record<ScenarioPhase, string> = {
-  request: "#3478b8",
-  "success-response": "#38895c",
-  "async-response": "#38895c",
-  "error-response": "#bd4e45",
+  request: "var(--discipline-integration)",
+  "success-response": "var(--color-healthy)",
+  "async-response": "var(--color-healthy)",
+  "error-response": "var(--color-danger)",
 };
 
 const OUTCOME_LABELS: Record<StepOutcome, string> = {
@@ -28,9 +28,9 @@ type Props = {
 };
 
 function messageColor(message: LayoutMessage): string {
-  if (message.missing) return "#9aa5b1";
+  if (message.missing) return "var(--color-muted)";
   if (message.phase) return PHASE_COLORS[message.phase];
-  return "#46576a";
+  return "var(--color-ink)";
 }
 
 function arrowPath(message: LayoutMessage): string {
@@ -89,7 +89,7 @@ export default function SequenceDiagram({
             >
               <path
                 d="M 0 0 L 10 5 L 0 10 z"
-                fill={key === "neutral" ? "#46576a" : key === "missing" ? "#9aa5b1" : PHASE_COLORS[key]}
+                fill={key === "neutral" ? "var(--color-ink)" : key === "missing" ? "var(--color-muted)" : PHASE_COLORS[key]}
               />
             </marker>
           ))}

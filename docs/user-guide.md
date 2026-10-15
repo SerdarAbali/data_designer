@@ -54,14 +54,91 @@ Open the address your administrator gave you (for example
 `http://10.0.0.51:5173`) and sign in with your email and password. There is a
 single internal account and no self-registration.
 
-The header contains the workspace navigation and the **Account menu** (your
-email and tenant, with sign-out):
+The compact top row contains Home, the workspace switcher, workspace navigation,
+search, the light/dark theme toggle, **Share**, and the **Account menu** (your
+email and tenant, with sign-out). Share downloads the existing workspace bundle;
+it does not publish the design or grant access to other users. Search finds
+visible canvas objects or filters the Catalog.
 
 | Tab | Purpose |
 |---|---|
-| **Catalog** | Model systems, objects, and fields. |
+| **Canvas** | Design Current and Candidate architecture across enabled disciplines. |
 | **Contracts** | Design contracts: mappings, test data, settings, scenarios. |
-| **Landscape** | See all systems and contracts as a map, trace field lineage, and write end-to-end scenarios. |
+| **Catalog** | Model systems, objects, and fields. |
+
+### Workspace Settings
+
+Open the workspace switcher in the header and choose **Settings** beside a
+workspace. Edit its name and select the active disciplines: **Enterprise
+Architecture**, **Information Architecture**, **Solution Architecture**, and
+**Integration Architecture**. At least one discipline must remain selected.
+Click **Save changes** to persist both the name and selection and close the
+modal. **Cancel** or the close button discards unsaved edits. On shorter
+screens, the settings body scrolls while the title, close button, and save
+actions stay visible. Changing disciplines does not delete architecture objects.
+
+### Architecture Canvas
+
+The **Canvas** is the main architecture workspace. Its discipline tabs show only
+the views enabled in Workspace Settings. Switching disciplines keeps the same
+workspace, architecture state, and canvas context while changing the
+objects and relationships shown. Its second compact row combines the state
+selector, **Enterprise**, **Information**, **Solution**, and **Integration**
+tabs, **Add Object**, and **View options**.
+
+**Current** is read-only. Create or select a **Candidate** to make architecture
+changes; Candidate additions, relationships, and layout are saved separately
+from Current. Systems keep the same canonical identity across views. New
+architecture objects also have one canonical record, while their canvas
+occurrences store state-specific placement and relationships.
+
+**Add Object** opens a contextual menu instead of a permanent palette:
+
+- **Enterprise Architecture**: Business Requirements and Business Capabilities,
+  each related to an existing system, plus existing systems.
+- **Information Architecture**: Information Objects with an Owner and an
+  Authoritative System.
+- **Solution Architecture**: Solution Boundaries, Components, and Interfaces,
+  each related to an existing system.
+- **Integration Architecture**: existing systems and contract-linked
+  relationships, existing contract linking, and Interfaces when Solution
+  is also enabled. The same Interface occurrence appears in both Solution and
+  Integration views. Select a relationship to see mapping coverage and the latest
+  explicit test status, then choose **Open Mapping & Tests** to use the existing
+  contract workspace.
+
+Select an architecture object or relationship to open its narrow right-side
+inspector. It shows supported properties, relationships, architecture state,
+and save status. Collapse the inspector without losing selection, reopen it
+with **Open inspector**, or close it to clear selection. Protected canonical
+properties shared with Current remain read-only. Remove actions affect the
+selected occurrence or relationship, not the canonical object.
+
+Solution Boundaries render as subtle containers around members described by
+existing parent references or **Contains** relationships. The container itself
+expresses containment; those relationships remain available in its inspector
+rather than drawing redundant lines through the enclosed objects. Dragging an
+editable boundary translates its contained objects together. This does not add
+boundary membership or resize controls.
+
+The canvas uses the rest of the viewport. Floating upper-left tools select or
+pan and choose the relationship type for connections. Zoom, Fit View, and
+fullscreen controls sit at the lower-right. View options control labels,
+the minimap, and object-type filters; filtering never removes hidden objects
+from the saved state. New Candidate and delete-state actions also live there.
+Existing Target states appear in the state selector when available.
+Named Candidate and Target options include their state type so it remains
+clear which architecture is active.
+
+Workspace, discipline, state, and page navigation wait for pending saves.
+Failed saves remain visible and prevent switching context; use **Retry save**
+for a failed layout/relationship save, or retry the object form that failed.
+Contract drafts retain their unsaved-change confirmation. Returning from a
+linked contract restores the same architecture view and canvas context.
+
+Light and dark themes use the same state and validation meanings. Initially
+the theme follows the operating system; the toggle remembers your explicit
+choice in this browser.
 
 ---
 

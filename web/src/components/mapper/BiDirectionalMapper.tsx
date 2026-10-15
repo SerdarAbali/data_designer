@@ -73,7 +73,7 @@ export default function BiDirectionalMapper({
     initialEdges.map((edge) => ({
       ...edge,
       type: "mapper-edge",
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#2563eb" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--discipline-integration)" },
       markerStart: undefined,
     }))
   );
@@ -106,7 +106,7 @@ export default function BiDirectionalMapper({
             ? "outbound"
             : "inbound",
       },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#2563eb" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--discipline-integration)" },
     };
 
     setEdges((current) => addEdge(newEdge, current));
@@ -135,7 +135,7 @@ export default function BiDirectionalMapper({
         deleteKeyCode={["Backspace", "Delete"]}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#d5dee6" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
+        <Background color="var(--color-grid)" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
         <Controls />
         <MiniMap pannable zoomable />
       </ReactFlow>

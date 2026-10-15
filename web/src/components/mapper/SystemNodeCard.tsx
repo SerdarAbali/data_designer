@@ -32,8 +32,8 @@ export default function SystemNodeCard({
     <div
       className={`system-node-card${selected ? " selected" : ""}`}
       style={{
-        background: "white",
-        border: selected ? "2px solid #2563eb" : "1px solid #d1d5db",
+        background: "var(--color-surface)",
+        border: selected ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
         borderRadius: "8px",
         padding: "12px",
         minWidth: "200px",
@@ -50,7 +50,7 @@ export default function SystemNodeCard({
             id="return-input"
             className="flow-handle"
             style={{
-              background: "#10b981",
+              background: "var(--color-healthy)",
               top: "25%",
             }}
             title="Inbound Response Connection"
@@ -61,7 +61,7 @@ export default function SystemNodeCard({
             id="return-input-secondary"
             className="flow-handle"
             style={{
-              background: "#10b981",
+              background: "var(--color-healthy)",
               top: "75%",
             }}
             title="Additional Inbound Response"
@@ -78,7 +78,7 @@ export default function SystemNodeCard({
             id="output"
             className="flow-handle"
             style={{
-              background: "#2563eb",
+              background: "var(--discipline-integration)",
               top: "25%",
             }}
             title="Outbound Data Connection"
@@ -89,7 +89,7 @@ export default function SystemNodeCard({
             id="output-secondary"
             className="flow-handle"
             style={{
-              background: "#2563eb",
+              background: "var(--discipline-integration)",
               top: "75%",
             }}
             title="Additional Outbound Connection"
@@ -106,7 +106,7 @@ export default function SystemNodeCard({
             id="response-output"
             className="flow-handle"
             style={{
-              background: "#10b981",
+              background: "var(--color-healthy)",
               left: "25%",
             }}
             title="Response Data Output"
@@ -117,7 +117,7 @@ export default function SystemNodeCard({
             id="response-output-secondary"
             className="flow-handle"
             style={{
-              background: "#10b981",
+              background: "var(--color-healthy)",
               left: "75%",
             }}
             title="Additional Response Output"
@@ -134,7 +134,7 @@ export default function SystemNodeCard({
             id="request-input"
             className="flow-handle"
             style={{
-              background: "#2563eb",
+              background: "var(--discipline-integration)",
               left: "25%",
             }}
             title="Request Input"
@@ -145,7 +145,7 @@ export default function SystemNodeCard({
             id="request-input-secondary"
             className="flow-handle"
             style={{
-              background: "#2563eb",
+              background: "var(--discipline-integration)",
               left: "75%",
             }}
             title="Additional Request Input"
@@ -177,7 +177,7 @@ export default function SystemNodeCard({
                 key={field.id}
                 style={{
                   padding: "4px 0",
-                  borderBottom: "1px solid #f3f4f6",
+                  borderBottom: "1px solid var(--color-border)",
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
@@ -187,8 +187,8 @@ export default function SystemNodeCard({
                 <span
                   style={{
                     fontSize: "10px",
-                    color: "#6b7280",
-                    background: "#f3f4f6",
+                    color: "var(--color-muted)",
+                    background: "var(--color-surface-muted)",
                     padding: "1px 6px",
                     borderRadius: "3px",
                   }}
@@ -199,7 +199,7 @@ export default function SystemNodeCard({
             ))}
           </ul>
           {data.fields.length > 5 && (
-            <small style={{ display: "block", marginTop: "4px", color: "#9ca3af" }}>
+            <small style={{ display: "block", marginTop: "4px", color: "var(--color-muted)" }}>
               +{data.fields.length - 5} more fields
             </small>
           )}
@@ -211,7 +211,7 @@ export default function SystemNodeCard({
           style={{
             margin: "0",
             fontSize: "12px",
-            color: "#9ca3af",
+            color: "var(--color-muted)",
             fontStyle: "italic",
           }}
         >

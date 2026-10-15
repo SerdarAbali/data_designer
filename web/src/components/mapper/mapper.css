@@ -26,7 +26,7 @@
 }
 
 .system-node-fields {
-  background: #f9fafb;
+  background: var(--color-surface);
   border-radius: 6px;
   padding: 8px;
   margin-top: 8px;
@@ -34,7 +34,7 @@
 
 .system-node-fields ul {
   scrollbar-width: thin;
-  scrollbar-color: #d1d5db #f3f4f6;
+  scrollbar-color: var(--color-muted) var(--color-on-accent);
 }
 
 .system-node-fields ul::-webkit-scrollbar {
@@ -42,24 +42,24 @@
 }
 
 .system-node-fields ul::-webkit-scrollbar-track {
-  background: #f3f4f6;
+  background: var(--color-surface);
   border-radius: 2px;
 }
 
 .system-node-fields ul::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--color-muted);
   border-radius: 2px;
 }
 
 .system-node-fields ul::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: var(--color-muted);
 }
 
 /* Flow Handle Styles */
 .flow-handle {
   width: 12px;
   height: 12px;
-  border: 2px solid white;
+  border: 2px solid var(--color-surface);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   transition: all 0.2s ease;
 }
@@ -71,32 +71,32 @@
 }
 
 .flow-handle.connectindicator {
-  background: #fbbf24 !important;
+  background: var(--color-danger) !important;
 }
 
 /* Outbound connection handles (Blue) */
 .react-flow__handle[data-type="source"][style*="background: rgb(37, 99, 235)"],
 .react-flow__handle[style*="background: #2563eb"] {
-  background: #2563eb !important;
+  background: var(--color-accent) !important;
   cursor: pointer;
 }
 
 .react-flow__handle[data-type="source"][style*="background: rgb(37, 99, 235)"]:hover,
 .react-flow__handle[style*="background: #2563eb"]:hover {
-  background: #1d4ed8 !important;
+  background: var(--color-accent) !important;
   box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4) !important;
 }
 
 /* Inbound connection handles (Green) */
 .react-flow__handle[data-type="target"][style*="background: rgb(16, 185, 129)"],
 .react-flow__handle[style*="background: #10b981"] {
-  background: #10b981 !important;
+  background: var(--color-healthy) !important;
   cursor: pointer;
 }
 
 .react-flow__handle[data-type="target"][style*="background: rgb(16, 185, 129)"]:hover,
 .react-flow__handle[style*="background: #10b981"]:hover {
-  background: #059669 !important;
+  background: var(--color-healthy) !important;
   box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4) !important;
 }
 
@@ -116,12 +116,12 @@
 
 /* Outbound edge styling */
 .react-flow__edge[data-direction="outbound"] {
-  stroke: #2563eb;
+  stroke: var(--color-accent);
 }
 
 /* Inbound edge styling */
 .react-flow__edge[data-direction="inbound"] {
-  stroke: #10b981;
+  stroke: var(--color-healthy);
 }
 
 /* Selected edge indicator */

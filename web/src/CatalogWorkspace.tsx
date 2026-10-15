@@ -1,11 +1,14 @@
 import React from "react";
 import CatalogInspector from "./components/catalog/CatalogInspector";
 import InspectorTabs, { type InspectorTab } from "./components/catalog/InspectorTabs";
-import EnterpriseLandscape from "./EnterpriseLandscape";
+import ArchitectureCanvas from "./ArchitectureCanvas";
 import IntegrationWorkspace from "./IntegrationWorkspace";
 import type { ScenarioPhase } from "./scenarioModel";
 import WorkspaceSwitcher from "./components/workspaces/WorkspaceSwitcher";
+import type { WorkspaceInfo } from "./architectureTypes";
 import ArchiveImpactDialog, { type ReferencingIntegration } from "./components/catalog/ArchiveImpactDialog";
+import type { NavigationGuard } from "./contextSaveQueue";
+import useStudioTheme from "./useStudioTheme";
 
 type System = {
   id: string;
@@ -190,7 +193,19 @@ export default function CatalogWorkspace({
   tenantName,
   loggingOut,
 }: Props) {
-  const [activeView, setActiveView] = React.useState<"catalog" | "integrations" | "landscape">("catalog");
+  const { theme, toggleTheme } = useStudioTheme();
+  const [transitioning, setTransitioning] = React.useState(false);
+  const [studioSearch, setStudioSearch] = React.useState("");
+  const canvasGuard = React.useRef<NavigationGuard>(async () => true);
+  const contractGuard = React.useRef<NavigationGuard>(async () => true);
+  const registerCanvasGuard = React.useCallback((guard: NavigationGuard) => {
+    canvasGuard.current = guard;
+  }, []);
+  const registerContractGuard = React.useCallback((guard: NavigationGuard) => {
+    contractGuard.current = guard;
+  }, []);
+  const [activeView, setActiveView] = React.useState<"canvas" | "catalog" | "integrations">("canvas");
+  const [activeWorkspace, setActiveWorkspace] = React.useState<WorkspaceInfo | null>(null);
   const [integrationToOpen, setIntegrationToOpen] = React.useState("");
   const [integrationPhaseToOpen, setIntegrationPhaseToOpen] = React.useState<ScenarioPhase | undefined>();
   const [quickAddSystemId, setQuickAddSystemId] = React.useState("");
@@ -222,6 +237,8 @@ export default function CatalogWorkspace({
   const systemsRequest = React.useRef(0);
   const objectsRequest = React.useRef(0);
   const fieldsRequest = React.useRef(0);
+  const workspaceRequest = React.useRef(0);
+  const catalogMutation = React.useRef<Promise<boolean> | null>(null);
   const selectedSystem = systems.find((system) => system.id === systemId) ?? null;
   const selectedObject = objects.find((object) => object.id === objectId) ?? null;
   const selectedField = fields.find((field) => field.id === fieldId) ?? null;
@@ -256,6 +273,25 @@ export default function CatalogWorkspace({
       if (requestId === systemsRequest.current) setLoadingSystems(false);
     }
   }, []);
+
+  const refreshWorkspace = React.useCallback(async () => {
+    const requestId = ++workspaceRequest.current;
+    try {
+      const list = await apiList<WorkspaceInfo>("/api/workspaces");
+      if (requestId !== workspaceRequest.current) return;
+      const active = list.find((w) => w.is_active) ?? list[0] ?? null;
+      setActiveWorkspace(active);
+    } catch (err) {
+      if (requestId === workspaceRequest.current) {
+        setError(err instanceof Error ? err.message : "Could not load the workspace.");
+        throw err;
+      }
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshWorkspace().catch(() => {});
+  }, [refreshWorkspace]);
 
   const refreshObjects = React.useCallback(async (currentSystemId: string, preferId?: string) => {
     const requestId = ++objectsRequest.current;
@@ -343,15 +379,69 @@ export default function CatalogWorkspace({
   async function runMutation(action: () => Promise<void>): Promise<boolean> {
     setError("");
     setSaving(true);
-    try {
-      await action();
-      return true;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The change could not be saved.");
-      return false;
-    } finally {
-      setSaving(false);
-    }
+    const operation = (async () => {
+      try {
+        await action();
+        return true;
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "The change could not be saved.");
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    })();
+    catalogMutation.current = operation;
+    return operation;
+  }
+
+  async function beforeNavigate() {
+    if (catalogMutation.current && !await catalogMutation.current) return false;
+    if (!await canvasGuard.current()) return false;
+    return contractGuard.current();
+  }
+
+  async function navigate(view: typeof activeView) {
+    if (view === activeView || transitioning) return;
+    if (await beforeNavigate()) setActiveView(view);
+  }
+
+  async function switchWorkspace() {
+    ++systemsRequest.current;
+    ++objectsRequest.current;
+    ++fieldsRequest.current;
+    setSystems([]);
+    setObjects([]);
+    setFields([]);
+    setObjectFieldCounts({});
+    setSystemId("");
+    setObjectId("");
+    setFieldId("");
+    setExpandedSystemId("");
+    setExpandedObjectId("");
+    setIntegrationToOpen("");
+    setIntegrationPhaseToOpen(undefined);
+    setQuickAddSystemId("");
+    setCatalogModal(null);
+    setArchiveImpactState(null);
+    setError("");
+    setActiveView("canvas");
+    catalogMutation.current = null;
+    await refreshWorkspace();
+    await refreshSystems();
+  }
+
+  async function exportWorkspace() {
+    if (!activeWorkspace) return;
+    if (!await beforeNavigate()) return;
+    await runMutation(async () => {
+      const bundle = await api<object>(`/api/workspaces/${activeWorkspace.id}/export`);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${activeWorkspace.name.replace(/[^a-z0-9]/gi, "_")}.dd.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    });
   }
 
   async function createSystem(event: React.FormEvent<HTMLFormElement>) {
@@ -562,70 +652,61 @@ export default function CatalogWorkspace({
   }
 
   return (
-    <main className="workspace">
+    <main className={`workspace studio-workspace view-${activeView}`} aria-busy={transitioning}>
       <header className="workspace-header">
-        <div className="workspace-brand">
-          <span className="brand-mark" aria-hidden="true">D</span>
-          <div>
-          <p className="eyebrow">INTERNAL DATA ARCHITECTURE</p>
-          <h1>Data Designer</h1>
-          <p className="workspace-subtitle">
-            {activeView === "catalog"
-              ? "Build your dynamic System → Object → Field catalog."
-              : activeView === "integrations"
-                ? "Design contracts and evaluate sample data using dynamic catalog fields."
-                : "Explore systems and their contract pathways."}
-          </p>
-          </div>
-        </div>
-        <WorkspaceSwitcher
-          currentWorkspaceName={tenantName}
-          csrfToken={csrfToken}
-          onSwitch={() => {
-            // Reset catalog state and reload everything for the newly active workspace
-            setSystems([]);
-            setObjects([]);
-            setFields([]);
-            setObjectFieldCounts({});
-            setSystemId("");
-            setObjectId("");
-            setFieldId("");
-            setExpandedSystemId("");
-            setExpandedObjectId("");
-            setError("");
-            void refreshSystems();
-          }}
-        />
-        <div className="workspace-header-actions">
+        <button type="button" className="studio-home" aria-label="Home - architecture canvas" title="Data Designer" onClick={() => void navigate("canvas")}>D</button>
+          <WorkspaceSwitcher
+            currentWorkspaceName={activeWorkspace?.name ?? tenantName}
+            csrfToken={csrfToken}
+            beforeSwitch={beforeNavigate}
+            onTransitionChange={setTransitioning}
+            onSwitch={switchWorkspace}
+            onDisciplinesUpdated={() => {
+              void refreshWorkspace().catch(() => {});
+            }}
+          />
           <nav className="workspace-nav" aria-label="Workspace">
             <button
               type="button"
-              className={activeView === "catalog" ? "nav-tab active" : "nav-tab"}
-              aria-pressed={activeView === "catalog"}
-              onClick={() => setActiveView("catalog")}
+              className={activeView === "canvas" ? "nav-tab active" : "nav-tab"}
+              aria-pressed={activeView === "canvas"}
+              onClick={() => void navigate("canvas")}
             >
-              Catalog
+              Canvas
             </button>
-            <button
-              type="button"
-              className={activeView === "integrations" ? "nav-tab active" : "nav-tab"}
-              aria-pressed={activeView === "integrations"}
-              onClick={() => {
-                setQuickAddSystemId("");
-                setActiveView("integrations");
-              }}
-            >
-              Contracts
-            </button>
-            <button
-              type="button"
-              className={activeView === "landscape" ? "nav-tab active" : "nav-tab"}
-              aria-pressed={activeView === "landscape"}
-              onClick={() => setActiveView("landscape")}
-            >
-              Landscape
-            </button>
+            {(!activeWorkspace || activeWorkspace.disciplines.includes("integration")) && (
+              <button
+                type="button"
+                className={activeView === "integrations" ? "nav-tab active" : "nav-tab"}
+                aria-pressed={activeView === "integrations"}
+                onClick={() => {
+                  setQuickAddSystemId("");
+                  void navigate("integrations");
+                }}
+              >
+                Contracts
+              </button>
+            )}
+            {(!activeWorkspace || activeWorkspace.disciplines.some((d) => d === "enterprise" || d === "information")) && (
+              <button
+                type="button"
+                className={activeView === "catalog" ? "nav-tab active" : "nav-tab"}
+                aria-pressed={activeView === "catalog"}
+                onClick={() => void navigate("catalog")}
+              >
+                Catalog
+              </button>
+            )}
           </nav>
+          <label className="studio-search">
+            <span aria-hidden="true">⌕</span>
+            <input type="search" aria-label="Search workspace" placeholder={activeView === "canvas" ? "Find on canvas…" : activeView === "integrations" ? "Find contract…" : "Search catalog…"} value={studioSearch} onChange={(event) => {
+              setStudioSearch(event.target.value);
+              setCatalogSearch(event.target.value);
+            }} />
+          </label>
+          <button type="button" className="studio-icon-button" aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} onClick={toggleTheme}>{theme === "light" ? "☾" : "☀"}</button>
+          <button type="button" className="studio-share" onClick={() => void exportWorkspace()} disabled={saving || transitioning || !activeWorkspace} title="Export this workspace as a shareable bundle">Share</button>
           <details className="workspace-account">
             <summary aria-label="Account menu">
               <span className="account-avatar" aria-hidden="true">{email.slice(0, 1).toUpperCase()}</span>
@@ -640,33 +721,48 @@ export default function CatalogWorkspace({
               </button>
             </div>
           </details>
-        </div>
       </header>
 
+      {error && activeView !== "catalog" && <ErrorNotice message={error} />}
+      <div className="studio-canvas-host" hidden={activeView !== "canvas"}>
+        <ArchitectureCanvas
+          key={activeWorkspace?.id ?? "loading"}
+          workspace={activeWorkspace}
+          visible={activeView === "canvas"}
+          search={activeView === "canvas" ? studioSearch : ""}
+          registerNavigationGuard={registerCanvasGuard}
+          onOpenCatalog={() => void navigate("catalog")}
+          onAddIntegration={(systemId) => {
+            void beforeNavigate().then((allowed) => {
+              if (!allowed) return;
+              setQuickAddSystemId(systemId);
+              setIntegrationToOpen("");
+              setIntegrationPhaseToOpen(undefined);
+              setActiveView("integrations");
+            });
+          }}
+          onOpenIntegration={(id, phase) => {
+            void beforeNavigate().then((allowed) => {
+              if (!allowed) return;
+              setQuickAddSystemId("");
+              setIntegrationToOpen(id);
+              setIntegrationPhaseToOpen(phase);
+              setActiveView("integrations");
+            });
+          }}
+        />
+      </div>
       {activeView === "integrations" ? (
         <IntegrationWorkspace
-          onBack={() => setActiveView("landscape")}
+          key={activeWorkspace?.id}
+          registerNavigationGuard={registerContractGuard}
+          search={studioSearch}
+          onBack={() => void navigate("canvas")}
           initialIntegrationId={quickAddSystemId ? undefined : integrationToOpen || undefined}
           initialContractView={quickAddSystemId ? undefined : integrationPhaseToOpen}
           newIntegrationSystemId={quickAddSystemId || undefined}
         />
-      ) : activeView === "landscape" ? (
-        <EnterpriseLandscape
-          onOpenCatalog={() => setActiveView("catalog")}
-          onAddIntegration={(systemId) => {
-            setQuickAddSystemId(systemId);
-            setIntegrationToOpen("");
-            setIntegrationPhaseToOpen(undefined);
-            setActiveView("integrations");
-          }}
-          onOpenIntegration={(id, phase) => {
-            setQuickAddSystemId("");
-            setIntegrationToOpen(id);
-            setIntegrationPhaseToOpen(phase);
-            setActiveView("integrations");
-          }}
-        />
-      ) : (
+      ) : activeView === "canvas" ? null : (
       <>
       <ErrorNotice message={error} />
 

@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.architecture.objects import router as architecture_objects_router
+from app.architecture.routes import router as architecture_router
 from app.auth.routes import router as auth_router
 from app.catalog.routes import router as catalog_router
 from app.db import check_database
@@ -30,6 +32,8 @@ app.include_router(catalog_router)
 app.include_router(integrations_router)
 app.include_router(scenarios_router)
 app.include_router(workspaces_router)
+app.include_router(architecture_router)
+app.include_router(architecture_objects_router)
 
 
 @app.get("/health", tags=["health"])

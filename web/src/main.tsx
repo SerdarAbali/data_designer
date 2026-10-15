@@ -5,6 +5,7 @@ import CatalogWorkspace from "./CatalogWorkspace";
 import "@xyflow/react/dist/style.css";
 import "./styles/tokens.css";
 import "./style.css";
+import "./styles/studio.css";
 
 type CurrentUser = {
   email: string;

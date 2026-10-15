@@ -29,7 +29,7 @@ export default function ArchiveImpactDialog({
       <div className="catalog-modal impact-dialog-modal">
         <header>
           <div>
-            <p className="eyebrow" style={{ color: "#b91c1c" }}>DEPENDENCY IMPACT</p>
+            <p className="eyebrow" style={{ color: "var(--color-danger)" }}>DEPENDENCY IMPACT</p>
             <h2 id="impact-title">Archive {itemName}?</h2>
           </div>
           <button type="button" className="ghost-button" onClick={onCancel} disabled={loading} aria-label="Close">
@@ -37,7 +37,7 @@ export default function ArchiveImpactDialog({
           </button>
         </header>
 
-        <p style={{ margin: "0 0 14px", color: "#374151", fontSize: "0.9rem", lineHeight: 1.5 }}>
+        <p style={{ margin: "0 0 14px", color: "var(--color-ink)", fontSize: "0.9rem", lineHeight: 1.5 }}>
           This {itemType} cannot be archived alone because it is actively used by{" "}
           <strong>{integrations.length}</strong> integration contract{integrations.length > 1 ? "s" : ""}:
         </p>
@@ -46,8 +46,8 @@ export default function ArchiveImpactDialog({
           style={{
             maxHeight: "180px",
             overflowY: "auto",
-            background: "#f9fafb",
-            border: "1px solid #e5e7eb",
+            background: "var(--color-surface-muted)",
+            border: "1px solid var(--color-border)",
             borderRadius: "8px",
             padding: "8px 12px",
             marginBottom: "16px",
@@ -62,11 +62,11 @@ export default function ArchiveImpactDialog({
                   alignItems: "center",
                   justifyContent: "space-between",
                   padding: "6px 0",
-                  borderBottom: idx < integrations.length - 1 ? "1px solid #f3f4f6" : "none",
+                  borderBottom: idx < integrations.length - 1 ? "1px solid var(--color-border)" : "none",
                   fontSize: "0.85rem",
                 }}
               >
-                <span style={{ fontWeight: 600, color: "#1f2937" }}>
+                <span style={{ fontWeight: 600, color: "var(--color-ink)" }}>
                   ⇄ {item.name || "Unnamed contract"}
                 </span>
                 {item.id && onOpenIntegration && (
@@ -94,13 +94,13 @@ export default function ArchiveImpactDialog({
 
         <div
           style={{
-            background: "#fef2f2",
-            border: "1px solid #fecaca",
+            background: "var(--color-danger-soft)",
+            border: "1px solid var(--color-danger)",
             borderRadius: "8px",
             padding: "10px 12px",
             marginBottom: "18px",
             fontSize: "0.82rem",
-            color: "#991b1b",
+            color: "var(--color-danger)",
             lineHeight: 1.4,
           }}
         >
@@ -115,8 +115,8 @@ export default function ArchiveImpactDialog({
           <button
             type="button"
             style={{
-              background: "#dc2626",
-              color: "white",
+              background: "var(--color-danger)",
+              color: "var(--color-on-accent)",
               fontWeight: 650,
             }}
             onClick={onConfirmCascade}
@@ -129,4 +129,3 @@ export default function ArchiveImpactDialog({
     </div>
   );
 }
-

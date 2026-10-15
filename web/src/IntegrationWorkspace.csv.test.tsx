@@ -111,8 +111,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function openEditor(tab = "Request") {
-  render(<IntegrationWorkspace onBack={vi.fn()} />);
+async function openEditor(tab = "Request", props: Partial<React.ComponentProps<typeof IntegrationWorkspace>> = {}) {
+  render(<IntegrationWorkspace onBack={vi.fn()} {...props} />);
   await screen.findByRole("heading", { name: "CSV test", level: 1 });
   await screen.findByRole("button", { name: tab });
   await waitFor(() => expect((screen.getByRole("button", { name: "Reload Schema" }) as HTMLButtonElement).disabled).toBe(false));
@@ -198,13 +198,30 @@ describe("CSV editor draft and persistence integration", () => {
     expect(saved.graph.edges).toHaveLength(0);
   });
   it("preserves imported drafts on revision conflicts and shows the existing reload guidance", async () => {
+    let guard!: () => Promise<boolean>;
     conflict = true;
-    await openEditor();
+    await openEditor("Request", { registerNavigationGuard: (next) => { guard = next; } });
     await importMapping();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/Revision conflict.*Reload/);
     expect(saved.graph.edges).toHaveLength(0);
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(await guard()).toBe(false);
+    conflict = false;
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved · r2");
+    expect(await guard()).toBe(true);
+  });
+  it("allows navigation after explicitly reloading a conflicted draft", async () => {
+    let guard!: () => Promise<boolean>;
+    conflict = true;
+    await openEditor("Request", { registerNavigationGuard: (next) => { guard = next; } });
+    await importMapping();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("button", { name: "Reload current version" });
+    fireEvent.click(screen.getByRole("button", { name: "Reload current version" }));
+    await waitFor(() => expect(document.querySelector(".save-state")?.textContent).toBe("Saved · r1"));
+    expect(await guard()).toBe(true);
   });
   it("invalidates Undo on phase switching without dropping the imported draft", async () => {
     await openEditor();

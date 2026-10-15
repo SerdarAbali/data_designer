@@ -196,6 +196,8 @@ type Props = {
   /** Phase tab (or the Scenarios tab) to show once the initial contract has loaded. */
   initialContractView?: ContractView | "scenarios";
   newIntegrationSystemId?: string;
+  registerNavigationGuard?: (guard: () => Promise<boolean>) => void;
+  search?: string;
 };
 
 const TRANSFORM_TYPES: GraphNodeType[] = [
@@ -1458,6 +1460,8 @@ export default function IntegrationWorkspace({
   initialIntegrationId,
   initialContractView,
   newIntegrationSystemId,
+  registerNavigationGuard,
+  search = "",
 }: Props) {
   const [systems, setSystems] = React.useState<System[]>([]);
   const [sourceObjects, setSourceObjects] = React.useState<CatalogObject[]>([]);
@@ -1538,6 +1542,33 @@ export default function IntegrationWorkspace({
   const [selectedRowIndex, setSelectedRowIndex] = React.useState(0);
   const [editorError, setEditorError] = React.useState("");
   const [configError, setConfigError] = React.useState("");
+  const saveFailed = React.useRef(false);
+  const dirtyRef = React.useRef(dirty);
+  dirtyRef.current = dirty;
+  const busy = saving || fieldSaving || quickFieldSaving || dependencySaving;
+  const busyRef = React.useRef(busy);
+  busyRef.current = busy;
+  const idleListeners = React.useRef(new Set<() => void>());
+  React.useEffect(() => {
+    if (!busy) {
+      idleListeners.current.forEach((resolve) => resolve());
+      idleListeners.current.clear();
+    }
+  }, [busy]);
+  const navigationGuard = React.useCallback(async () => {
+      while (busyRef.current) {
+        await new Promise<void>((resolve) => idleListeners.current.add(resolve));
+      }
+      if (saveFailed.current) {
+        setEditorError("Resolve the failed contract save before leaving this workspace.");
+        return false;
+      }
+      return !dirtyRef.current || window.confirm("Discard unsaved contract changes and leave this contract?");
+  }, []);
+  React.useEffect(() => {
+    registerNavigationGuard?.(navigationGuard);
+    return () => registerNavigationGuard?.(async () => true);
+  }, [navigationGuard, registerNavigationGuard]);
   const [csvDialog, setCsvDialog] = React.useState<"import" | "export" | null>(null);
   const [csvUndo, setCsvUndo] = React.useState<{
     nodes: FlowNode[];
@@ -2012,8 +2043,8 @@ export default function IntegrationWorkspace({
           zIndex: 1000,
           data: mapperData,
           label: "Implicit cast",
-          labelStyle: { fill: "#805a16", fontSize: 10, fontWeight: 650 },
-          labelBgStyle: { fill: "#fff5d9", fillOpacity: 0.96 },
+          labelStyle: { fill: "var(--color-draft)", fontSize: 10, fontWeight: 650 },
+          labelBgStyle: { fill: "var(--color-surface)", fillOpacity: 0.96 },
           labelBgPadding: [5, 3] as [number, number],
           labelBgBorderRadius: 4,
           style: { ...edge.style, strokeWidth: 2.5 },
@@ -2244,6 +2275,7 @@ export default function IntegrationWorkspace({
       setSelectedEdgeId("");
       setDrawerView(null);
       setDirty(false);
+      saveFailed.current = false;
       setSimulation(null);
       setEditorError("");
       setScenariosOpen(false);
@@ -2868,13 +2900,13 @@ export default function IntegrationWorkspace({
     return interactionType === "REQUEST_RESPONSE";
   }
 
-  function openScenarioContractPhase(contractId: string, phase: MappingPhase) {
+  async function openScenarioContractPhase(contractId: string, phase: MappingPhase) {
     if (contractId === selectedIntegrationId) {
       selectContractView(phaseAvailable(phase) ? phase : "overview");
       return;
     }
     if (!integrations.some((item) => item.id === contractId)) return;
-    if (dirty && !window.confirm("Discard unsaved contract changes and open the other contract?")) return;
+    if (!await navigationGuard()) return;
     pendingContractViewRef.current = { integrationId: contractId, view: phase };
     setEditorError("");
     setDirty(false);
@@ -2891,6 +2923,7 @@ export default function IntegrationWorkspace({
       return;
     }
     setSaving(true);
+    saveFailed.current = false;
     try {
       const updated = await api<Integration>(
         `/api/integrations/${selectedIntegration.id}/graph`,
@@ -2932,6 +2965,7 @@ export default function IntegrationWorkspace({
         );
       }
     } catch (caught) {
+      saveFailed.current = true;
       if (caught instanceof ApiError && caught.status === 409) {
         setEditorError(`${caught.message} Use Reload to discard local changes and load the current version.`);
       } else {
@@ -3684,7 +3718,7 @@ export default function IntegrationWorkspace({
   return (
     <section className={`integration-workspace${selectedIntegration ? " has-integration" : ""}`}>
       <header className="integration-header">
-        <button type="button" className="back-link" onClick={onBack}>← Back</button>
+        <button type="button" className="back-link" onClick={onBack}>← Return to Architecture Canvas</button>
         <div className="contract-heading">
           <h1>{selectedIntegration ? name || selectedIntegration.name : "New contract"}</h1>
           <p>
@@ -3699,7 +3733,10 @@ export default function IntegrationWorkspace({
             <select
               value={selectedIntegrationId}
               onChange={(event) => {
-                if (event.target.value === "__new__") {
+                const value = event.target.value;
+                void navigationGuard().then((allowed) => {
+                if (!allowed) return;
+                if (value === "__new__") {
                   setEditorError("");
                   setName("");
                   setSelectedIntegrationId("");
@@ -3710,15 +3747,16 @@ export default function IntegrationWorkspace({
                 }
                 setEditorError("");
                 setDirty(false);
-                setSelectedIntegrationId(event.target.value);
+                setSelectedIntegrationId(value);
                 setDrawerView(null);
                 setSamplePanelExpanded(false);
                 setDataPreviewOpen(false);
+                });
               }}
               aria-label="Contract"
             >
               <option value="">Select a contract</option>
-              {integrations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+              {integrations.filter((item) => item.id === selectedIntegrationId || item.name.toLowerCase().includes(search.trim().toLowerCase())).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
               <option value="__new__">+ New contract</option>
             </select>
           </label>
@@ -4449,8 +4487,14 @@ export default function IntegrationWorkspace({
                     deleteKeyCode={["Backspace", "Delete"]}
                     proOptions={{ hideAttribution: true }}
                   >
-                    <Background color="#d5dee6" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
-                    <MiniMap pannable zoomable />
+                    <Background color="var(--color-grid)" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
+                    <MiniMap
+                      pannable
+                      zoomable
+                      nodeColor="var(--color-border-strong)"
+                      nodeStrokeColor="var(--color-muted)"
+                      maskColor="color-mix(in srgb, var(--color-canvas) 70%, transparent)"
+                    />
                     <Controls />
                   </ReactFlow>
                 </>

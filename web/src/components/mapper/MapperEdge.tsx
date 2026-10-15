@@ -23,9 +23,9 @@ type MapperEdgeData = {
 
 type MapperEdgeType = Edge<MapperEdgeData>;
 
-const OUTBOUND_COLOR = "#2563eb";
-const INBOUND_COLOR = "#10b981";
-const ERROR_RESPONSE_COLOR = "#b84c4c";
+const OUTBOUND_COLOR = "var(--discipline-integration)";
+const INBOUND_COLOR = "var(--color-healthy)";
+const ERROR_RESPONSE_COLOR = "var(--color-danger)";
 
 export function mapperEdgePath(
   sourceX: number,
@@ -125,7 +125,7 @@ export default function MapperEdge({
               top: labelY,
               transform: "translate(-50%, -50%)",
               pointerEvents: "none",
-              background: "white",
+              background: "var(--color-surface)",
               padding: "2px 6px",
               borderRadius: "4px",
               fontSize: "12px",

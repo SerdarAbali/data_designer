@@ -1,20 +1,15 @@
 import React from "react";
 import NewWorkspaceModal from "./NewWorkspaceModal";
-
-export type WorkspaceInfo = {
-  id: string;
-  name: string;
-  description: string | null;
-  is_active: boolean;
-  systems_count: number;
-  contracts_count: number;
-  scenarios_count: number;
-};
+import WorkspaceDisciplinesModal from "./WorkspaceDisciplinesModal";
+import type { ArchitectureDiscipline, WorkspaceInfo } from "../../architectureTypes";
 
 type WorkspaceSwitcherProps = {
   currentWorkspaceName: string;
-  onSwitch: () => void;
+  onSwitch: () => void | Promise<void>;
   csrfToken: () => string;
+  onDisciplinesUpdated?: () => void;
+  beforeSwitch?: () => Promise<boolean>;
+  onTransitionChange?: (active: boolean) => void;
 };
 
 async function apiWs<T>(path: string, csrf: () => string, init: RequestInit = {}): Promise<T> {
@@ -41,12 +36,17 @@ export default function WorkspaceSwitcher({
   currentWorkspaceName,
   onSwitch,
   csrfToken,
+  onDisciplinesUpdated,
+  beforeSwitch,
+  onTransitionChange,
 }: WorkspaceSwitcherProps) {
   const detailsRef = React.useRef<HTMLDetailsElement>(null);
+  const lastOpen = React.useRef(false);
   const [workspaces, setWorkspaces] = React.useState<WorkspaceInfo[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [switching, setSwitching] = React.useState<string | null>(null);
+  const workspacesRequest = React.useRef(0);
 
   // New workspace modal
   const [showNewModal, setShowNewModal] = React.useState(false);
@@ -64,55 +64,99 @@ export default function WorkspaceSwitcher({
   const activeWorkspace = workspaces.find((w) => w.is_active);
 
   async function loadWorkspaces() {
+    const requestId = ++workspacesRequest.current;
     setLoading(true);
     setError("");
     try {
       const list = await apiWs<WorkspaceInfo[]>("/api/workspaces", csrfToken);
+      if (requestId !== workspacesRequest.current) return;
       setWorkspaces(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load workspaces");
+      if (requestId === workspacesRequest.current) {
+        setError(e instanceof Error ? e.message : "Could not load workspaces");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === workspacesRequest.current) setLoading(false);
     }
   }
 
-  // Load on first open
-  const [hasLoaded, setHasLoaded] = React.useState(false);
-
   function handleToggle(e: React.SyntheticEvent<HTMLDetailsElement>) {
-    if ((e.currentTarget as HTMLDetailsElement).open && !hasLoaded) {
-      setHasLoaded(true);
+    const open = e.currentTarget.open;
+    if (open && !lastOpen.current) {
       void loadWorkspaces();
     }
+    lastOpen.current = open;
   }
 
   async function handleSwitch(id: string) {
     if (switching) return;
     setSwitching(id);
+    onTransitionChange?.(true);
     try {
+      if (beforeSwitch && !await beforeSwitch()) return;
       await apiWs<WorkspaceInfo>(`/api/workspaces/${id}/switch`, csrfToken, { method: "POST" });
+      await loadWorkspaces();
       // Close dropdown
       if (detailsRef.current) detailsRef.current.open = false;
-      onSwitch();
+      await onSwitch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Switch failed");
     } finally {
       setSwitching(null);
+      onTransitionChange?.(false);
     }
   }
 
-  async function handleCreate(name: string, description: string, seedDemoData: boolean) {
+  // Disciplines modal
+  const [editingDisciplinesWs, setEditingDisciplinesWs] = React.useState<WorkspaceInfo | null>(null);
+  const [updatingDisciplines, setUpdatingDisciplines] = React.useState(false);
+
+  async function handleCreate(
+    name: string,
+    description: string,
+    seedDemoData: boolean,
+    disciplines: ArchitectureDiscipline[],
+  ) {
     setCreating(true);
+    onTransitionChange?.(true);
     try {
+      if (beforeSwitch && !await beforeSwitch()) throw new Error("Resolve the pending save before creating a workspace.");
       await apiWs<WorkspaceInfo>("/api/workspaces", csrfToken, {
         method: "POST",
-        body: JSON.stringify({ name, description: description || null, seed_demo_data: seedDemoData }),
+        body: JSON.stringify({
+          name,
+          description: description || null,
+          seed_demo_data: seedDemoData,
+          disciplines,
+        }),
       });
+      await loadWorkspaces();
       setShowNewModal(false);
       if (detailsRef.current) detailsRef.current.open = false;
-      onSwitch();
+      await onSwitch();
     } finally {
       setCreating(false);
+      onTransitionChange?.(false);
+    }
+  }
+
+  async function handleUpdateDisciplines(
+    workspaceId: string,
+    name: string,
+    disciplines: ArchitectureDiscipline[],
+  ) {
+    setUpdatingDisciplines(true);
+    try {
+      if (beforeSwitch && !await beforeSwitch()) throw new Error("Resolve the pending save before changing workspace settings.");
+      const updated = await apiWs<WorkspaceInfo>(`/api/workspaces/${workspaceId}`, csrfToken, {
+        method: "PATCH",
+        body: JSON.stringify({ name, disciplines }),
+      });
+      setWorkspaces((list) => list.map((ws) => ws.id === updated.id ? updated : ws));
+      onDisciplinesUpdated?.();
+      setEditingDisciplinesWs(null);
+    } finally {
+      setUpdatingDisciplines(false);
     }
   }
 
@@ -122,20 +166,24 @@ export default function WorkspaceSwitcher({
       return;
     }
     setForking(true);
+    onTransitionChange?.(true);
     setForkError("");
     try {
+      if (beforeSwitch && !await beforeSwitch()) throw new Error("Resolve the pending save before forking a workspace.");
       await apiWs<WorkspaceInfo>(`/api/workspaces/${sourceId}/fork`, csrfToken, {
         method: "POST",
         body: JSON.stringify({ name: forkName.trim() }),
       });
+      await loadWorkspaces();
       setForkingId(null);
       setForkName("");
       if (detailsRef.current) detailsRef.current.open = false;
-      onSwitch();
+      await onSwitch();
     } catch (e) {
       setForkError(e instanceof Error ? e.message : "Fork failed");
     } finally {
       setForking(false);
+      onTransitionChange?.(false);
     }
   }
 
@@ -241,6 +289,17 @@ export default function WorkspaceSwitcher({
                     <button
                       type="button"
                       className="ws-action-btn"
+                      title="Workspace Settings"
+                      onClick={() => {
+                        if (detailsRef.current) detailsRef.current.open = false;
+                        setEditingDisciplinesWs(ws);
+                      }}
+                    >
+                      ⚙ Settings
+                    </button>
+                    <button
+                      type="button"
+                      className="ws-action-btn"
                       title="Fork this workspace"
                       onClick={() => { setForkingId(ws.id); setForkName(`${ws.name} (fork)`); setForkError(""); }}
                     >
@@ -281,6 +340,14 @@ export default function WorkspaceSwitcher({
         onClose={() => setShowNewModal(false)}
         onCreate={handleCreate}
         loading={creating}
+      />
+
+      <WorkspaceDisciplinesModal
+        isOpen={Boolean(editingDisciplinesWs)}
+        workspace={editingDisciplinesWs}
+        onClose={() => setEditingDisciplinesWs(null)}
+        onUpdate={handleUpdateDisciplines}
+        loading={updatingDisciplines}
       />
     </>
   );
