@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
+import UnifiedInspector from "../components/inspector/UnifiedInspector";
 import {
   SOLUTION_COMPONENT_TYPES,
   type SolutionComponent,
@@ -36,6 +37,7 @@ type Props = {
   onAddInterface: (draft: InterfaceDraft) => void;
   onClose: () => void;
   onCollapse: () => void;
+  trace?: ReactNode;
 };
 
 const EMPTY_DRAFT: InterfaceDraft = {
@@ -57,6 +59,7 @@ export default function ComponentEditorPanel({
   onAddInterface,
   onClose,
   onCollapse,
+  trace,
 }: Props) {
   const [name, setName] = useState(component.name);
   const [description, setDescription] = useState(component.description ?? "");
@@ -79,20 +82,8 @@ export default function ComponentEditorPanel({
     setDraft(EMPTY_DRAFT);
   }
 
-  return (
-    <aside className="architecture-relationship-panel solution-panel" aria-label="Component details">
-      <header>
-        <div>
-          <p className="eyebrow">COMPONENT</p>
-          <h3>{component.name}</h3>
-        </div>
-        <div className="studio-inspector-actions">
-          <button type="button" className="secondary-button" aria-label="Collapse component inspector" onClick={onCollapse}>›</button>
-          <button type="button" className="secondary-button" aria-label="Close component details" onClick={onClose}>✕</button>
-        </div>
-      </header>
-      <p className="studio-inspector-state">{stateName} · {editable ? "Editable" : "Read-only"} <span>{saveStatus === "idle" ? "" : saveStatus}</span></p>
-
+  const properties = (
+    <>
       <label>
         Name
         <input value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} />
@@ -143,66 +134,90 @@ export default function ComponentEditorPanel({
           </button>
         </div>
       )}
+    </>
+  );
 
-      <section className="solution-interfaces-section">
-        <div className="information-section-heading">
-          <strong>Interfaces</strong>
-          <span className="item-count">{component.interfaces.length}</span>
-        </div>
-        {component.interfaces.length === 0 ? (
-          <p className="architecture-topbar-hint">No interfaces yet. Add provided or required interfaces below.</p>
-        ) : (
-          <ul className="solution-interface-list">
-            {component.interfaces.map((ui) => (
-              <li key={ui.object_id}>
-                <button type="button" onClick={() => onSelectInterface(ui.object_id)}>
-                  <span>{ui.name}</span>
-                  <small>
-                    <em className={`solution-direction direction-${ui.direction}`}>{ui.direction}</em>
-                    {ui.operations.length} {ui.operations.length === 1 ? "operation" : "operations"}
-                  </small>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+  const relationshipsPanel = (
+    <section className="solution-interfaces-section">
+      <div className="information-section-heading">
+        <strong>Interfaces</strong>
+        <span className="item-count">{component.interfaces.length}</span>
+      </div>
+      {component.interfaces.length === 0 ? (
+        <p className="architecture-topbar-hint">No interfaces yet. Add provided or required interfaces below.</p>
+      ) : (
+        <ul className="solution-interface-list">
+          {component.interfaces.map((ui) => (
+            <li key={ui.object_id}>
+              <button type="button" onClick={() => onSelectInterface(ui.object_id)}>
+                <span>{ui.name}</span>
+                <small>
+                  <em className={`solution-direction direction-${ui.direction}`}>{ui.direction}</em>
+                  {ui.operations.length} {ui.operations.length === 1 ? "operation" : "operations"}
+                </small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
-        {editable && (
-          <form className="solution-interface-form" onSubmit={submitInterface}>
-            <p className="studio-menu-caption">New interface</p>
-            <label>
-              Name
-              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-            </label>
-            <label>
-              Direction
-              <select
-                value={draft.direction}
-                onChange={(event) => setDraft({ ...draft, direction: event.target.value as SolutionDirection })}
-              >
-                <option value="provided">Provided</option>
-                <option value="required">Required</option>
-              </select>
-            </label>
-            <label>
-              Kind
-              <select
-                value={draft.interface_kind}
-                onChange={(event) => setDraft({ ...draft, interface_kind: event.target.value as SolutionInterfaceKind | "" })}
-              >
-                <option value="">Unspecified</option>
-                <option value="sync">Sync</option>
-                <option value="async">Async</option>
-              </select>
-            </label>
-            <label>
-              Protocol
-              <input value={draft.protocol} onChange={(event) => setDraft({ ...draft, protocol: event.target.value })} />
-            </label>
-            <button type="submit" disabled={busy || !draft.name.trim()}>Add interface</button>
-          </form>
-        )}
-      </section>
-    </aside>
+      {editable && (
+        <form className="solution-interface-form" onSubmit={submitInterface}>
+          <p className="studio-menu-caption">New interface</p>
+          <label>
+            Name
+            <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+          </label>
+          <label>
+            Direction
+            <select
+              value={draft.direction}
+              onChange={(event) => setDraft({ ...draft, direction: event.target.value as SolutionDirection })}
+            >
+              <option value="provided">Provided</option>
+              <option value="required">Required</option>
+            </select>
+          </label>
+          <label>
+            Kind
+            <select
+              value={draft.interface_kind}
+              onChange={(event) => setDraft({ ...draft, interface_kind: event.target.value as SolutionInterfaceKind | "" })}
+            >
+              <option value="">Unspecified</option>
+              <option value="sync">Sync</option>
+              <option value="async">Async</option>
+            </select>
+          </label>
+          <label>
+            Protocol
+            <input value={draft.protocol} onChange={(event) => setDraft({ ...draft, protocol: event.target.value })} />
+          </label>
+          <button type="submit" disabled={busy || !draft.name.trim()}>Add interface</button>
+        </form>
+      )}
+    </section>
+  );
+
+  return (
+    <UnifiedInspector
+      ariaLabel="Component details"
+      eyebrow="COMPONENT"
+      title={component.name}
+      identifier={component.object_id}
+      stateName={stateName}
+      status={editable ? "Editable" : "Read-only"}
+      saveStatus={saveStatus}
+      collapseLabel="Collapse component inspector"
+      closeLabel="Close component details"
+      onCollapse={onCollapse}
+      onClose={onClose}
+      defaultTab="relationships"
+      panels={[
+        { id: "properties", label: "Properties", content: properties },
+        { id: "relationships", label: "Relationships", count: component.interfaces.length, content: relationshipsPanel },
+        { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
+      ]}
+    />
   );
 }

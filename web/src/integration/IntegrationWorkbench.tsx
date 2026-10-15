@@ -627,10 +627,48 @@ export default function IntegrationWorkbench({
             ? "Design interfaces, message flow and conformance for integration contracts."
             : "Current state is read-only. Duplicate it to record integration properties."}
         </span>
-        {selectedContract && view !== "landscape" && (
-          <span className="integration-toolbar-selected">
-            Contract: <strong>{selectedContract.name}</strong>
-          </span>
+        {landscape && (
+          <label className="integration-contract-picker">
+            <span className="integration-contract-picker-label">Contract</span>
+            <select
+              aria-label="Contract"
+              value={selectedId ?? ""}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "__new__") {
+                  integrationLog.info("create contract requested", {});
+                  onOpenIntegration?.("");
+                  return;
+                }
+                if (!value) {
+                  integrationLog.info("contract cleared", {});
+                  setSelectedId(null);
+                  setDetail(null);
+                  setFlow(null);
+                  setConformance(null);
+                  setPropertiesOpen(false);
+                  return;
+                }
+                selectContract(value, view === "landscape" ? "contract" : view);
+              }}
+            >
+              <option value="">Select existing contract</option>
+              {landscape.contracts.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · {item.source.system_name}→{item.target.system_name}
+                </option>
+              ))}
+              {onOpenIntegration && <option value="__new__">Create contract…</option>}
+            </select>
+            {selectedContract && (
+              <span className="integration-contract-context" title="Selected contract context">
+                {selectedContract.source.system_name} · {selectedContract.source.object_name} →{" "}
+                {selectedContract.target.system_name} · {selectedContract.target.object_name}
+                {" · "}
+                {selectedContract.interaction_type}
+              </span>
+            )}
+          </label>
         )}
         {saveStatus === "error" && (
           <span className="integration-toolbar-error" role="status">

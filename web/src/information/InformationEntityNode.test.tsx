@@ -3,7 +3,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import InformationEntityNode from "./InformationEntityNode";
-import { cardinalityNotation, type InformationEntity } from "./informationModel";
+import {
+  arrangeEntities,
+  cardinalityNotation,
+  chooseHandles,
+  type InformationEntity,
+} from "./informationModel";
 
 vi.mock("@xyflow/react", () => ({
   Position: { Left: "left", Right: "right" },
@@ -66,7 +71,30 @@ describe("InformationEntityNode", () => {
 
   it("renders cardinality notation", () => {
     expect(cardinalityNotation("one_to_one")).toEqual({ source: "1", target: "1" });
-    expect(cardinalityNotation("one_to_many")).toEqual({ source: "1", target: "N" });
-    expect(cardinalityNotation("many_to_many")).toEqual({ source: "N", target: "M" });
+    expect(cardinalityNotation("one_to_many")).toEqual({ source: "1", target: "1..*" });
+    expect(cardinalityNotation("many_to_many")).toEqual({ source: "1..*", target: "1..*" });
+    expect(cardinalityNotation("one_to_many", true, false)).toEqual({ source: "0..1", target: "1..*" });
+    expect(cardinalityNotation("many_to_many", false, true)).toEqual({ source: "1..*", target: "0..*" });
+  });
+
+  it("selects handles from relative entity positions", () => {
+    expect(chooseHandles({ x: 0, y: 0 }, { x: 300, y: 10 })).toEqual({ source: "right", target: "left" });
+    expect(chooseHandles({ x: 300, y: 0 }, { x: 0, y: 0 })).toEqual({ source: "left", target: "right" });
+    expect(chooseHandles({ x: 0, y: 0 }, { x: 10, y: 300 })).toEqual({ source: "bottom", target: "top" });
+    expect(chooseHandles({ x: 0, y: 300 }, { x: 0, y: 0 })).toEqual({ source: "top", target: "bottom" });
+  });
+
+  it("arranges entities left-to-right and top-to-bottom by relationship depth", () => {
+    const entities = [
+      { occurrence_id: "occ-b", object_id: "b" },
+      { occurrence_id: "occ-a", object_id: "a" },
+    ];
+    const relationships = [{ source_object_id: "a", target_object_id: "b" }];
+    const ltr = arrangeEntities(entities, relationships, "ltr");
+    expect(ltr.get("occ-a")).toEqual({ x: 60, y: 60 });
+    expect(ltr.get("occ-b")).toEqual({ x: 380, y: 60 });
+    const ttb = arrangeEntities(entities, relationships, "ttb");
+    expect(ttb.get("occ-a")).toEqual({ x: 60, y: 60 });
+    expect(ttb.get("occ-b")).toEqual({ x: 60, y: 270 });
   });
 });

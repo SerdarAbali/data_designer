@@ -1,6 +1,5 @@
 import React from "react";
 import CatalogInspector from "./components/catalog/CatalogInspector";
-import InspectorTabs, { type InspectorTab } from "./components/catalog/InspectorTabs";
 import ArchitectureCanvas from "./ArchitectureCanvas";
 import IntegrationWorkspace from "./IntegrationWorkspace";
 import type { ScenarioPhase } from "./scenarioModel";
@@ -139,7 +138,7 @@ export default function CatalogWorkspace({
   const [catalogSearch, setCatalogSearch] = React.useState("");
   const [expandedSystemId, setExpandedSystemId] = React.useState("");
   const [expandedObjectId, setExpandedObjectId] = React.useState("");
-  const [inspectorTab, setInspectorTab] = React.useState<InspectorTab>("general");
+  const [catalogTreeWidth, setCatalogTreeWidth] = React.useState(300);
   const [catalogModal, setCatalogModal] = React.useState<CatalogModal>(null);
   const [systems, setSystems] = React.useState<System[]>([]);
   const [objects, setObjects] = React.useState<CatalogObject[]>([]);
@@ -171,10 +170,6 @@ export default function CatalogWorkspace({
   const selectedSystem = systems.find((system) => system.id === systemId) ?? null;
   const selectedObject = objects.find((object) => object.id === objectId) ?? null;
   const selectedField = fields.find((field) => field.id === fieldId) ?? null;
-
-  React.useEffect(() => {
-    setInspectorTab("general");
-  }, [systemId, objectId, fieldId]);
 
   const refreshSystems = React.useCallback(async (preferId?: string) => {
     const requestId = ++systemsRequest.current;
@@ -393,8 +388,15 @@ export default function CatalogWorkspace({
     const form = toFormData(event);
     if (!selectedSystem) return;
     await runMutation(async () => {
-      const x = Number(form.get("x"));
-      const y = Number(form.get("y"));
+      // Position X/Y are hidden from the compact system editor; keep the
+      // landscape position unless an explicit catalog-purpose field supplies it.
+      const rawX = form.get("x");
+      const rawY = form.get("y");
+      const x = Number(rawX);
+      const y = Number(rawY);
+      const position = rawX !== null && rawY !== null && Number.isFinite(x) && Number.isFinite(y)
+        ? { x, y }
+        : selectedSystem.position ?? { x: 0, y: 0 };
       await api<System>(`/api/catalog/systems/${selectedSystem.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -403,7 +405,7 @@ export default function CatalogWorkspace({
           description: valueOrNull(form.get("description")),
           icon: valueOrNull(form.get("icon")),
           color: valueOrNull(form.get("color")),
-          position: { x: Number.isFinite(x) ? x : 0, y: Number.isFinite(y) ? y : 0 },
+          position,
           metadata: objectMetadata(form.get("metadata")),
         }),
       });
@@ -580,6 +582,22 @@ export default function CatalogWorkspace({
     });
   }
 
+  function startCatalogResize(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = catalogTreeWidth;
+    const move = (moveEvent: PointerEvent) => {
+      const next = Math.min(480, Math.max(220, startWidth + moveEvent.clientX - startX));
+      setCatalogTreeWidth(next);
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+  }
+
   return (
     <main className={`workspace studio-workspace view-${activeView}`} aria-busy={transitioning}>
       <header className="workspace-header">
@@ -695,7 +713,10 @@ export default function CatalogWorkspace({
       <>
       <ErrorNotice message={error} />
 
-      <div className="catalog-grid">
+      <div
+        className="catalog-grid"
+        style={{ gridTemplateColumns: `${catalogTreeWidth}px 10px minmax(0, 1fr)` }}
+      >
         <section className="catalog-panel systems-panel" aria-labelledby="systems-heading">
           <div className="panel-heading">
             <div>
@@ -840,7 +861,17 @@ export default function CatalogWorkspace({
           )}
         </section>
 
+        <div
+          className="catalog-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize catalog tree"
+          onPointerDown={startCatalogResize}
+        />
+
         <CatalogInspector
+          key={fieldId || objectId || systemId || "catalog"}
+          workspaceId={activeWorkspace?.id ?? ""}
           system={!objectId ? selectedSystem : null}
           object={objectId && !fieldId ? selectedObject : null}
           field={fieldId ? selectedField : null}
@@ -850,8 +881,6 @@ export default function CatalogWorkspace({
           loadingObjects={loadingObjects}
           loadingFields={loadingFields}
           saving={saving}
-          tab={inspectorTab}
-          onTabChange={setInspectorTab}
           onSaveSystem={saveSystem}
           onSaveObject={saveObject}
           onSaveField={saveField}
@@ -877,378 +906,6 @@ export default function CatalogWorkspace({
             }
           }}
         />
-        {selectedSystem && selectedObject && selectedField && selectedSystem.id === "" && (
-        <>
-        <section className="catalog-panel detail-panel" aria-labelledby="system-detail-heading">
-          {selectedSystem ? (
-            <>
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">SYSTEM DESIGNER</p>
-                  <h2 id="system-detail-heading">{selectedSystem.name}</h2>
-                </div>
-                <button
-                  type="button"
-                  className="danger-button"
-                  disabled={saving}
-                  onClick={() =>
-                    void archiveItem(
-                      `/api/catalog/systems/${selectedSystem.id}`,
-                      selectedSystem.name,
-                      async () => {
-                        await refreshSystems();
-                      },
-                    )
-                  }
-                >
-                  Archive
-                </button>
-              </div>
-              <form className="editor-form" onSubmit={saveSystem} key={selectedSystem.id}>
-                <InspectorTabs value={inspectorTab} onChange={setInspectorTab} />
-                <div className="inspector-tab-panel" hidden={inspectorTab !== "general"}>
-                  <label>
-                    System name
-                    <input name="name" required maxLength={160} defaultValue={selectedSystem.name} />
-                  </label>
-                  <label>
-                    Description
-                    <textarea name="description" rows={3} defaultValue={selectedSystem.description ?? ""} />
-                  </label>
-                </div>
-                <div className="inspector-tab-panel" hidden={inspectorTab !== "schema"}>
-                <div className="form-row">
-                  <label>
-                    Kind
-                    <input name="kind" required maxLength={100} defaultValue={selectedSystem.kind} />
-                  </label>
-                  <label>
-                    Icon
-                    <input name="icon" maxLength={100} defaultValue={selectedSystem.icon ?? ""} />
-                  </label>
-                  <label>
-                    Color
-                    <input name="color" maxLength={40} placeholder="#527ca4" defaultValue={selectedSystem.color ?? ""} />
-                  </label>
-                </div>
-                <div className="form-row system-position">
-                  <label>
-                    Landscape X
-                    <input type="number" name="x" defaultValue={selectedSystem.position?.x ?? 0} />
-                  </label>
-                  <label>
-                    Landscape Y
-                    <input type="number" name="y" defaultValue={selectedSystem.position?.y ?? 0} />
-                  </label>
-                  <span className="muted">Position is used by the landscape view.</span>
-                </div>
-                </div>
-                <div className="inspector-tab-panel" hidden={inspectorTab !== "metadata"}>
-                  <label>
-                    Metadata (JSON)
-                    <textarea name="metadata" rows={8} spellCheck={false} defaultValue={metadataText(selectedSystem.metadata)} />
-                  </label>
-                </div>
-                <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save system"}</button>
-              </form>
-
-              <div className="subsection-heading">
-                <div>
-                  <p className="eyebrow">SYSTEM CONTENTS</p>
-                  <h3>Objects</h3>
-                </div>
-                <span className="item-count">{objects.length}</span>
-              </div>
-              <form className="compact-form object-create" onSubmit={createObject}>
-                <h3>Add an object</h3>
-                <div className="form-row">
-                  <label>
-                    Name
-                    <input name="name" required maxLength={160} placeholder="e.g. Customer" />
-                  </label>
-                  <label>
-                    Label
-                    <input name="label" required maxLength={160} placeholder="Display label" />
-                  </label>
-                </div>
-                <div className="form-row">
-                  <label>
-                    Description
-                    <input name="description" maxLength={2000} />
-                  </label>
-                  <label>
-                    Metadata (JSON)
-                    <input name="metadata" defaultValue="{}" />
-                  </label>
-                </div>
-                <button type="submit" disabled={saving}>Add object</button>
-              </form>
-              {loadingObjects ? (
-                <p className="muted" role="status">Loading objects…</p>
-              ) : objects.length === 0 ? (
-                <p className="empty-state">This system has no objects yet.</p>
-              ) : (
-                <ul className="object-list">
-                  {objects.map((object, index) => (
-                    <li className={object.id === objectId ? "object-row selected" : "object-row"} key={object.id}>
-                      <button type="button" className="object-select" onClick={() => setObjectId(object.id)}>
-                        <span className="object-glyph">▦</span>
-                        <span><strong>{object.label}</strong><small>{object.name}</small></span>
-                      </button>
-                      <ReorderButtons
-                        disabled={saving}
-                        onMove={(direction) =>
-                          void reorder(
-                            objects,
-                            index,
-                            direction,
-                            (id) => `/api/catalog/objects/${id}`,
-                            () => refreshObjects(selectedSystem.id),
-                          )
-                        }
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {selectedObject && (
-                <form className="editor-form object-editor" onSubmit={saveObject} key={selectedObject.id}>
-                  <div className="subsection-heading">
-                    <div>
-                      <p className="eyebrow">OBJECT DETAILS</p>
-                      <h3>{selectedObject.label}</h3>
-                    </div>
-                    <button
-                      type="button"
-                      className="danger-button"
-                      disabled={saving}
-                      onClick={() =>
-                        void archiveItem(
-                          `/api/catalog/objects/${selectedObject.id}`,
-                          selectedObject.label,
-                          () => refreshObjects(selectedSystem.id),
-                        )
-                      }
-                    >
-                      Archive
-                    </button>
-                  </div>
-                  <InspectorTabs value={inspectorTab} onChange={setInspectorTab} />
-                  <div className="inspector-tab-panel" hidden={inspectorTab !== "general"}>
-                  <div className="form-row">
-                    <label>
-                      Name
-                      <input name="name" required maxLength={160} defaultValue={selectedObject.name} />
-                    </label>
-                    <label>
-                      Label
-                      <input name="label" required maxLength={160} defaultValue={selectedObject.label} />
-                    </label>
-                  </div>
-                  <label>
-                    Description
-                    <textarea name="description" rows={2} defaultValue={selectedObject.description ?? ""} />
-                  </label>
-                  </div>
-                  <div className="inspector-tab-panel" hidden={inspectorTab !== "schema"}>
-                  <div className="form-row">
-                    <label>
-                      External identifier
-                      <input
-                        name="external_identifier"
-                        defaultValue={selectedObject.external_identifier ?? ""}
-                      />
-                    </label>
-                    <label>
-                      Position
-                      <input name="position" type="number" min={0} defaultValue={selectedObject.position} />
-                    </label>
-                  </div>
-                  </div>
-                  <div className="inspector-tab-panel" hidden={inspectorTab !== "metadata"}>
-                  <label>
-                    Metadata (JSON)
-                    <textarea name="metadata" rows={8} spellCheck={false} defaultValue={metadataText(selectedObject.metadata)} />
-                  </label>
-                  </div>
-                  <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save object"}</button>
-                </form>
-              )}
-            </>
-          ) : (
-            <div className="empty-workspace">
-              <span className="empty-icon">◇</span>
-              <h2>{loadingSystems ? "Loading catalog…" : "Create or select a system"}</h2>
-              <p>Objects and fields belong to a system, and will be available for contract design as soon as they are saved.</p>
-            </div>
-          )}
-        </section>
-
-        <section className="catalog-panel field-panel" aria-labelledby="field-heading">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">FIELD DESIGNER</p>
-              <h2 id="field-heading">{selectedObject ? selectedObject.label : "Fields"}</h2>
-            </div>
-            <span className="item-count">{fields.length}</span>
-          </div>
-          {!selectedObject ? (
-            <p className="empty-state">Select or create an object to manage its fields.</p>
-          ) : (
-            <>
-              <p className="field-parent">
-                In <strong>{selectedSystem?.name}</strong> / <strong>{selectedObject.name}</strong>
-              </p>
-              <form className="compact-form" onSubmit={createField}>
-                <h3>Add a field</h3>
-                <div className="form-row">
-                  <label>
-                    Name
-                    <input name="name" required maxLength={160} placeholder="e.g. customer_id" />
-                  </label>
-                  <label>
-                    Label
-                    <input name="label" required maxLength={160} placeholder="Customer ID" />
-                  </label>
-                </div>
-                <label>
-                  Data type
-                  <input name="data_type" required maxLength={100} placeholder="string, integer, or any generic type" />
-                </label>
-                <div className="check-row">
-                  <label><input name="required" type="checkbox" /> Required</label>
-                  <label><input name="nullable" type="checkbox" defaultChecked /> Nullable</label>
-                </div>
-                <label>
-                  Default value (JSON, blank for none)
-                  <input name="default_value" placeholder='"value", 0, true' />
-                </label>
-                <label>
-                  Metadata (JSON)
-                  <textarea name="metadata" rows={2} defaultValue="{}" />
-                </label>
-                <button type="submit" disabled={saving}>Add field</button>
-              </form>
-
-              {loadingFields ? (
-                <p className="muted" role="status">Loading fields…</p>
-              ) : fields.length === 0 ? (
-                <p className="empty-state">No fields yet. Add generic field metadata for this object.</p>
-              ) : (
-                <ul className="field-list">
-                  {fields.map((field, index) => (
-                    <li key={field.id} className={field.id === fieldId ? "field-row selected" : "field-row"}>
-                      <button type="button" className="field-select" onClick={() => setFieldId(field.id)}>
-                        <span className="field-type">{field.data_type}</span>
-                        <span><strong>{field.label}</strong><small>{field.name}</small></span>
-                        <span className="field-badges">
-                          {field.required && <small className="badge">Required</small>}
-                          {!field.nullable && <small className="badge">Not null</small>}
-                        </span>
-                      </button>
-                      <ReorderButtons
-                        disabled={saving}
-                        onMove={(direction) =>
-                          void reorder(
-                            fields,
-                            index,
-                            direction,
-                            (id) => `/api/catalog/fields/${id}`,
-                            () => refreshFields(selectedObject.id),
-                          )
-                        }
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {selectedField && (
-                <form className="editor-form field-editor" onSubmit={saveField} key={selectedField.id}>
-                  <div className="subsection-heading">
-                    <div>
-                      <p className="eyebrow">FIELD DETAILS</p>
-                      <h3>{selectedField.label}</h3>
-                    </div>
-                    <button
-                      type="button"
-                      className="danger-button"
-                      disabled={saving}
-                      onClick={() =>
-                        void archiveItem(
-                          `/api/catalog/fields/${selectedField.id}`,
-                          selectedField.label,
-                          () => refreshFields(selectedObject.id),
-                        )
-                      }
-                    >
-                      Archive
-                    </button>
-                  </div>
-                  <InspectorTabs value={inspectorTab} onChange={setInspectorTab} />
-                  <div className="inspector-tab-panel" hidden={inspectorTab !== "general"}>
-                  <div className="form-row">
-                    <label>
-                      Name
-                      <input name="name" required maxLength={160} defaultValue={selectedField.name} />
-                    </label>
-                    <label>
-                      Label
-                      <input name="label" required maxLength={160} defaultValue={selectedField.label} />
-                    </label>
-                  </div>
-                  <label>
-                    Description
-                    <textarea name="description" rows={3} defaultValue={selectedField.description ?? ""} />
-                  </label>
-                  </div>
-                  <div className="inspector-tab-panel" hidden={inspectorTab !== "schema"}>
-                  <label>
-                    Data type
-                    <input name="data_type" required maxLength={100} defaultValue={selectedField.data_type} />
-                  </label>
-                  <div className="check-row">
-                    <label><input name="required" type="checkbox" defaultChecked={selectedField.required} /> Required</label>
-                    <label><input name="nullable" type="checkbox" defaultChecked={selectedField.nullable} /> Nullable</label>
-                  </div>
-                  <div className="form-row">
-                    <label>
-                      Default value (JSON, blank for none)
-                      <input
-                        name="default_value"
-                        defaultValue={selectedField.default_value == null ? "" : JSON.stringify(selectedField.default_value)}
-                      />
-                    </label>
-                    <label>
-                      Position
-                      <input name="position" type="number" min={0} defaultValue={selectedField.position} />
-                    </label>
-                  </div>
-                  <div className="form-row">
-                    <label>
-                      External identifier
-                      <input name="external_identifier" defaultValue={selectedField.external_identifier ?? ""} />
-                    </label>
-                    <label>
-                      Origin
-                      <input name="origin" defaultValue={selectedField.origin} />
-                    </label>
-                  </div>
-                  </div>
-                  <div className="inspector-tab-panel" hidden={inspectorTab !== "metadata"}>
-                  <label>
-                    Metadata (JSON)
-                    <textarea name="metadata" rows={8} spellCheck={false} defaultValue={metadataText(selectedField.metadata)} />
-                  </label>
-                  </div>
-                  <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save field"}</button>
-                </form>
-              )}
-            </>
-          )}
-        </section>
-        </>
-        )}
       </div>
       </>
       )}

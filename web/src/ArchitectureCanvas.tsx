@@ -9,7 +9,6 @@ import {
   useReactFlow,
   applyNodeChanges,
   type Connection,
-  type Edge,
   type NodeChange,
 } from "@xyflow/react";
 import ArchitectureTopBar, { type SaveStatus } from "./components/architecture/ArchitectureTopBar";
@@ -18,6 +17,14 @@ import ArchitectureOccurrenceNodeCard, {
 } from "./components/architecture/ArchitectureOccurrenceNode";
 import ArchitectureDisciplineTabs from "./components/architecture/ArchitectureDisciplineTabs";
 import ArchitectureBoundaryNode from "./components/architecture/ArchitectureBoundaryNode";
+import ArchitectureRelationshipEdge, {
+  type ArchitectureRelationshipFlowEdge,
+} from "./components/architecture/ArchitectureRelationshipEdge";
+import {
+  chooseHandles,
+  handleId,
+  type Rect,
+} from "./components/architecture/architectureRouting";
 import { type NavigationGuard } from "./contextSaveQueue";
 import StudioMenu from "./components/architecture/StudioMenu";
 import ArchitectureObjectDialog, {
@@ -111,9 +118,13 @@ type Props = {
   visible?: boolean;
 };
 
-type RelationshipEdge = Edge<{ relationship: ResolvedRelationship }>;
+type RelationshipEdge = ArchitectureRelationshipFlowEdge;
 
 const nodeTypes = { occurrence: ArchitectureOccurrenceNodeCard, boundary: ArchitectureBoundaryNode };
+const edgeTypes = { architectureRelationship: ArchitectureRelationshipEdge };
+
+const DEFAULT_NODE_WIDTH = 220;
+const DEFAULT_NODE_HEIGHT = 90;
 
 // crypto.randomUUID is only available in secure contexts (HTTPS or localhost).
 function newId(): string {
@@ -387,36 +398,86 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     };
   }, [integrationsById, relationships]);
 
-  const edges = React.useMemo<RelationshipEdge[]>(() => relationships.filter((relationship) =>
-    !(boundaryGeometry.has(relationship.sourceOccurrenceId) && relationship.type.toLowerCase() === "contains"),
-  ).map((relationship) => {
-    const selected = relationship.id === selectedEdgeId;
-    const integrationHealth = relationship.integrationId ? health[relationship.integrationId] : undefined;
-    const color = !relationship.integrationId
-      ? "#8a97a6"
-      : TEST_COLOR[integrationHealth?.test ?? "untested"];
-    const integrationName = relationship.integrationId
-      ? integrationsById.get(relationship.integrationId)?.name ?? relationship.name
-      : relationship.name;
-    return {
-      id: relationship.id,
-      source: relationship.sourceOccurrenceId,
-      target: relationship.targetOccurrenceId,
-      label: integrationName ? `${relationship.type.toLowerCase()} · ${integrationName}` : relationship.type.toLowerCase(),
-      selected,
-      data: { relationship },
-      labelShowBg: true,
-      labelStyle: { fill: "var(--color-muted)", fontWeight: 500, fontSize: 11 },
-      labelBgStyle: { fill: "var(--color-canvas)", fillOpacity: 0.96 },
-      className: relationship.integrationId ? "architecture-edge integration" : "architecture-edge",
-      style: {
-        stroke: color,
-        strokeWidth: selected ? 2 : 1.2,
-        ...(relationship.integrationId ? {} : { strokeDasharray: "6 5" }),
-      },
-      markerEnd: { type: MarkerType.ArrowClosed, color },
-    };
-  }), [health, integrationsById, relationships, selectedEdgeId, boundaryGeometry]);
+  const nodeRects = React.useMemo(() => {
+    const map = new Map<string, Rect>();
+    for (const node of nodes) {
+      const styleWidth = typeof node.style?.width === "number" ? node.style.width : undefined;
+      const styleHeight = typeof node.style?.height === "number" ? node.style.height : undefined;
+      map.set(node.id, {
+        x: node.position.x,
+        y: node.position.y,
+        width: node.measured?.width ?? node.width ?? styleWidth ?? DEFAULT_NODE_WIDTH,
+        height: node.measured?.height ?? node.height ?? styleHeight ?? DEFAULT_NODE_HEIGHT,
+      });
+    }
+    return map;
+  }, [nodes]);
+
+  const edges = React.useMemo<RelationshipEdge[]>(() => {
+    const visible = relationships.filter((relationship) =>
+      !(boundaryGeometry.has(relationship.sourceOccurrenceId) && relationship.type.toLowerCase() === "contains"),
+    );
+    // Group edges that share a node pair so parallel relationships route on
+    // distinct lanes while each keeps its own id, direction and semantics.
+    const grouped = new Map<string, ResolvedRelationship[]>();
+    for (const relationship of visible) {
+      const key = [relationship.sourceOccurrenceId, relationship.targetOccurrenceId].sort().join("|");
+      const list = grouped.get(key) ?? [];
+      list.push(relationship);
+      grouped.set(key, list);
+    }
+    const laneByRelationship = new Map<string, { laneIndex: number; laneCount: number }>();
+    for (const list of grouped.values()) {
+      list.forEach((relationship, index) =>
+        laneByRelationship.set(relationship.id, { laneIndex: index, laneCount: list.length }));
+    }
+
+    return visible.map((relationship) => {
+      const selected = relationship.id === selectedEdgeId;
+      const integrationHealth = relationship.integrationId ? health[relationship.integrationId] : undefined;
+      const color = !relationship.integrationId
+        ? "#8a97a6"
+        : TEST_COLOR[integrationHealth?.test ?? "untested"];
+      const integrationName = relationship.integrationId
+        ? integrationsById.get(relationship.integrationId)?.name ?? relationship.name
+        : relationship.name;
+      const sourceRect = nodeRects.get(relationship.sourceOccurrenceId);
+      const targetRect = nodeRects.get(relationship.targetOccurrenceId);
+      const handles = sourceRect && targetRect
+        ? chooseHandles(sourceRect, targetRect)
+        : { source: "right" as const, target: "left" as const };
+      const obstacles = [...nodeRects.entries()]
+        .filter(([nodeId]) =>
+          nodeId !== relationship.sourceOccurrenceId && nodeId !== relationship.targetOccurrenceId)
+        .map(([, rect]) => rect);
+      const lane = laneByRelationship.get(relationship.id) ?? { laneIndex: 0, laneCount: 1 };
+      return {
+        id: relationship.id,
+        source: relationship.sourceOccurrenceId,
+        target: relationship.targetOccurrenceId,
+        sourceHandle: handleId("source", handles.source),
+        targetHandle: handleId("target", handles.target),
+        type: "architectureRelationship" as const,
+        label: integrationName ? `${relationship.type.toLowerCase()} · ${integrationName}` : relationship.type.toLowerCase(),
+        selected,
+        data: {
+          relationship,
+          obstacles,
+          laneIndex: lane.laneIndex,
+          laneCount: lane.laneCount,
+          sourceId: relationship.sourceOccurrenceId,
+          targetId: relationship.targetOccurrenceId,
+        },
+        className: relationship.integrationId ? "architecture-edge integration" : "architecture-edge",
+        style: {
+          stroke: color,
+          strokeWidth: selected ? 2 : 1.2,
+          ...(relationship.integrationId ? {} : { strokeDasharray: "6 5" }),
+        },
+        markerEnd: { type: MarkerType.ArrowClosed, color },
+      };
+    });
+  }, [health, integrationsById, relationships, selectedEdgeId, boundaryGeometry, nodeRects]);
 
   const selectedRelationship = relationships.find((rel) => rel.id === selectedEdgeId) ?? null;
   const selectedOccurrence = visibleStateNodes.find(
@@ -754,6 +815,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onNodesChange={(changes: NodeChange<ArchitectureOccurrenceNode>[]) => {
                 setNodes((current) => applyNodeChanges(changes, current));
               }}
@@ -814,7 +876,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
               <Panel position="top-left" className="studio-floating-tools">
                 <button type="button" aria-label="Select objects" aria-pressed={!panMode} onClick={() => setPanMode(false)}>↖</button>
                 <button type="button" aria-label="Pan canvas" aria-pressed={panMode} onClick={() => setPanMode(true)}>✥</button>
-                {editable && <select aria-label="Relationship type for new connections" title="Drag from an object's right handle to another object's left handle" value={relationshipType} onChange={(event) => setRelationshipType(event.target.value as SemanticRelationshipType)}>
+                {editable && <select aria-label="Relationship type for new connections" title="Drag from an object's handle to another object's handle" value={relationshipType} onChange={(event) => setRelationshipType(event.target.value as SemanticRelationshipType)}>
                   {SEMANTIC_RELATIONSHIP_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                 </select>}
               </Panel>

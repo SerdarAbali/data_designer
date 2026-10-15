@@ -21,10 +21,17 @@ vi.mock("@xyflow/react", () => ({
   ReactFlow: ({
     nodes,
     onNodeClick,
+    onConnect,
     children,
   }: {
     nodes: { id: string; data: { entity: { name: string } } }[];
     onNodeClick: (event: null, node: unknown) => void;
+    onConnect: (connection: {
+      source: string;
+      target: string;
+      sourceHandle: string | null;
+      targetHandle: string | null;
+    }) => void;
     children: React.ReactNode;
   }) => (
     <div>
@@ -33,6 +40,18 @@ vi.mock("@xyflow/react", () => ({
           {node.data.entity.name}
         </button>
       ))}
+      <button
+        onClick={() =>
+          onConnect({
+            source: nodes[0]?.id ?? "",
+            target: nodes[1]?.id ?? "",
+            sourceHandle: "s-top",
+            targetHandle: "t-top",
+          })
+        }
+      >
+        manual-connect
+      </button>
       {children}
     </div>
   ),
@@ -84,6 +103,21 @@ const model: InformationModel = {
         },
       ],
     },
+    {
+      object_id: "ent-2",
+      occurrence_id: "occ-2",
+      name: "Order",
+      description: null,
+      owner: null,
+      steward: null,
+      authoritative_system_id: null,
+      authoritative_system_name: null,
+      classification: null,
+      sensitivity: null,
+      external_identifier: null,
+      position: { x: 320, y: 0 },
+      attributes: [],
+    },
   ],
   relationships: [],
 };
@@ -100,6 +134,22 @@ beforeEach(() => {
         {
           entity: { ...model.entities[0], object_id: "ent-2", occurrence_id: "occ-2", name: "New entity", attributes: [] },
           state: activeState,
+        },
+        201,
+      );
+    }
+    if (url.includes("/information/relationships") && init?.method === "POST") {
+      return reply(
+        {
+          id: "rel-1",
+          source_object_id: "ent-1",
+          target_object_id: "ent-2",
+          name: null,
+          cardinality: "one_to_many",
+          source_optional: false,
+          target_optional: true,
+          source_handle: "s-top",
+          target_handle: "t-top",
         },
         201,
       );
@@ -140,6 +190,23 @@ describe("InformationWorkbench", () => {
     const post = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "POST");
     expect(post).toBeTruthy();
     expect(String(post?.[0])).toContain("/information/entities");
+  });
+
+  it("preserves the manually selected handles when creating a relationship", async () => {
+    render(<InformationWorkbench {...baseProps} />);
+    await screen.findByRole("button", { name: "Customer" });
+    fireEvent.click(screen.getByRole("button", { name: "manual-connect" }));
+    await waitFor(() => {
+      const post = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([path, init]) => String(path).includes("/information/relationships") && init?.method === "POST",
+        );
+      expect(post).toBeTruthy();
+      const body = String(post?.[1]?.body);
+      expect(body).toContain('"source_handle":"s-top"');
+      expect(body).toContain('"target_handle":"t-top"');
+    });
   });
 
   it("opens the entity inspector and attribute inspector", async () => {

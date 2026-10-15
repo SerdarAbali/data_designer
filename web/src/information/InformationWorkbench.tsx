@@ -21,6 +21,7 @@ import {
   updateInformationAttribute,
   updateInformationEntity,
   updateInformationRelationship,
+  arrangeEntities,
   type InformationCardinality,
   type InformationModel,
 } from "./informationModel";
@@ -148,6 +149,26 @@ export default function InformationWorkbench({
     return { x: maxX + 280, y: minY };
   }
 
+  function handleArrange(direction: "ltr" | "ttb") {
+    if (!model || !editable) return;
+    const positions = arrangeEntities(model.entities, model.relationships, direction);
+    if (positions.size === 0) return;
+    setModel((current) => current ? {
+      ...current,
+      entities: current.entities.map((entity) => {
+        const position = positions.get(entity.occurrence_id);
+        return position ? { ...entity, position } : entity;
+      }),
+    } : current);
+    mutateActive((state) => {
+      let next = state;
+      for (const [occurrenceId, position] of positions) {
+        next = moveOccurrence(next, occurrenceId, position);
+      }
+      return next;
+    });
+  }
+
   async function handleCreateEntity() {
     if (!stateId) return;
     await run(async () => {
@@ -220,7 +241,7 @@ export default function InformationWorkbench({
                 setSelectedAttributeId(null);
                 setSelectedRelationshipId(null);
               }}
-              onConnect={(sourceObjectId, targetObjectId) => {
+              onConnect={(sourceObjectId, targetObjectId, sourceHandle, targetHandle) => {
                 if (!stateId) return;
                 void run(async () => {
                   await createInformationRelationship(workspaceId, {
@@ -228,8 +249,19 @@ export default function InformationWorkbench({
                     source_object_id: sourceObjectId,
                     target_object_id: targetObjectId,
                     cardinality: pendingCardinality,
+                    source_handle: sourceHandle,
+                    target_handle: targetHandle,
                   });
                 });
+              }}
+              onReconnectRelationship={({ relationshipId, sourceObjectId, targetObjectId, sourceHandle, targetHandle }) => {
+                if (!stateId) return;
+                void run(() => updateInformationRelationship(workspaceId, relationshipId, stateId, {
+                  source_object_id: sourceObjectId,
+                  target_object_id: targetObjectId,
+                  source_handle: sourceHandle,
+                  target_handle: targetHandle,
+                }));
               }}
               onMoveEntity={(occurrenceId, position) => {
                 setModel((current) => current ? {
@@ -240,6 +272,7 @@ export default function InformationWorkbench({
                 mutateActive((state) => moveOccurrence(state, occurrenceId, position));
               }}
               onPendingCardinalityChange={setPendingCardinality}
+              onArrange={handleArrange}
             />
           )}
 
@@ -296,6 +329,46 @@ export default function InformationWorkbench({
                 createInformationAttribute(workspaceId, selectedEntity.object_id, { ...draft, state_id: stateId }))}
               onClose={() => setSelectedObjectId(null)}
               onCollapse={() => setInspectorCollapsed(true)}
+              relationships={
+                <section className="information-relationships-section">
+                  {(!model?.relationships.some((item) =>
+                    item.source_object_id === selectedEntity.object_id
+                    || item.target_object_id === selectedEntity.object_id)) ? (
+                    <p className="muted">This entity has no relationships yet.</p>
+                  ) : (
+                    <ul className="information-attribute-editor-list">
+                      {model?.relationships
+                        .filter((item) =>
+                          item.source_object_id === selectedEntity.object_id
+                          || item.target_object_id === selectedEntity.object_id)
+                        .map((item) => {
+                          const other = item.source_object_id === selectedEntity.object_id
+                            ? item.target_object_id
+                            : item.source_object_id;
+                          const otherName = model?.entities.find((entity) => entity.object_id === other)?.name
+                            ?? "Entity";
+                          const outgoing = item.source_object_id === selectedEntity.object_id;
+                          return (
+                            <li key={item.id}>
+                              <button type="button" onClick={() => setSelectedRelationshipId(item.id)}>
+                                <span>{outgoing ? "→" : "←"} {otherName}</span>
+                                <small>{item.name || item.cardinality.replace(/_/g, " ")}</small>
+                              </button>
+                            </li>
+                          );
+                        })}
+                    </ul>
+                  )}
+                </section>
+              }
+              trace={(
+                <ObjectTracePanel
+                  workspaceId={workspaceId}
+                  stateId={stateId || null}
+                  objectId={selectedEntity.object_id}
+                  onNavigate={onNavigateTrace}
+                />
+              )}
             />
           )}
 
@@ -320,15 +393,6 @@ export default function InformationWorkbench({
               }}
               onClose={() => setSelectedRelationshipId(null)}
               onCollapse={() => setInspectorCollapsed(true)}
-            />
-          )}
-
-          {!inspectorCollapsed && (selectedAttribute || selectedEntity) && (
-            <ObjectTracePanel
-              workspaceId={workspaceId}
-              stateId={stateId || null}
-              objectId={selectedAttribute?.object_id ?? selectedEntity?.object_id ?? null}
-              onNavigate={onNavigateTrace}
             />
           )}
         </div>

@@ -184,6 +184,9 @@ class InformationRelationshipResponse(BaseModel):
     cardinality: InformationCardinality
     source_optional: bool
     target_optional: bool
+    # Optional manual connector endpoints; absent means automatic routing.
+    source_handle: str | None = None
+    target_handle: str | None = None
 
 
 class InformationModelResponse(BaseModel):
@@ -260,6 +263,8 @@ class InformationRelationshipCreate(BaseModel):
     cardinality: InformationCardinality = "one_to_many"
     source_optional: bool = False
     target_optional: bool = True
+    source_handle: str | None = Field(default=None, max_length=32)
+    target_handle: str | None = Field(default=None, max_length=32)
 
 
 class InformationRelationshipUpdate(BaseModel):
@@ -267,6 +272,11 @@ class InformationRelationshipUpdate(BaseModel):
     cardinality: InformationCardinality | None = None
     source_optional: bool | None = None
     target_optional: bool | None = None
+    # Reconnection may reassign the endpoints; None (unset) leaves them as-is.
+    source_object_id: UUID | None = None
+    target_object_id: UUID | None = None
+    source_handle: str | None = Field(default=None, max_length=32)
+    target_handle: str | None = Field(default=None, max_length=32)
 
 
 SolutionInterfaceDirection = Literal["provided", "required"]

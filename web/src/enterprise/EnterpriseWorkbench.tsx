@@ -655,15 +655,14 @@ export default function EnterpriseWorkbench({
             onSelectObject={selectObject}
             onClose={() => setSelectedObjectId(null)}
             onCollapse={() => setInspectorCollapsed(true)}
-          />
-        )}
-
-        {!inspectorCollapsed && selectedObject && (
-          <ObjectTracePanel
-            workspaceId={workspaceId}
-            stateId={stateId || null}
-            objectId={selectedObject.object_id}
-            onNavigate={onNavigateTrace}
+            trace={(
+              <ObjectTracePanel
+                workspaceId={workspaceId}
+                stateId={stateId || null}
+                objectId={selectedObject.object_id}
+                onNavigate={onNavigateTrace}
+              />
+            )}
           />
         )}
       </div>

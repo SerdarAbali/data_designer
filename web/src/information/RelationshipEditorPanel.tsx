@@ -16,7 +16,15 @@ type Props = {
   stateName: string;
   saveStatus: SaveStatus;
   busy: boolean;
-  onChange: (relationshipId: string, patch: { cardinality?: InformationCardinality; name?: string | null }) => void;
+  onChange: (
+    relationshipId: string,
+    patch: {
+      cardinality?: InformationCardinality;
+      name?: string | null;
+      source_handle?: string | null;
+      target_handle?: string | null;
+    },
+  ) => void;
   onDelete: (relationshipId: string) => void;
   onClose: () => void;
   onCollapse: () => void;
@@ -37,8 +45,13 @@ export default function RelationshipEditorPanel({
 }: Props) {
   const [cardinality, setCardinality] = useState<InformationCardinality>(relationship.cardinality);
   const [name, setName] = useState(relationship.name ?? "");
-  const notation = cardinalityNotation(relationship.cardinality);
+  const notation = cardinalityNotation(
+    relationship.cardinality,
+    relationship.source_optional,
+    relationship.target_optional,
+  );
   const dirty = cardinality !== relationship.cardinality || name !== (relationship.name ?? "");
+  const manualRouting = Boolean(relationship.source_handle || relationship.target_handle);
 
   return (
     <aside className="architecture-relationship-panel information-panel" aria-label="Relationship details">
@@ -65,6 +78,29 @@ export default function RelationshipEditorPanel({
         Name
         <input value={name} disabled={!editable} placeholder="Optional verb" onChange={(event) => setName(event.target.value)} />
       </label>
+
+      <section className="information-routing-section">
+        <div className="information-section-heading">
+          <strong>Connector routing</strong>
+          <span className="item-count">{manualRouting ? "Manual" : "Automatic"}</span>
+        </div>
+        <p className="architecture-topbar-hint">
+          {manualRouting
+            ? "This relationship keeps the endpoints you selected by hand."
+            : "Endpoints are chosen automatically from entity positions."}
+        </p>
+        {editable && manualRouting && (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => onChange(relationship.id, { source_handle: null, target_handle: null })}
+          >
+            Reset to automatic routing
+          </button>
+        )}
+      </section>
+
       {editable && (
         <button
           type="button"

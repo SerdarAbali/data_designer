@@ -3,6 +3,7 @@ import type { ArchitectureObject } from "../../architectureTypes";
 import { ARCHITECTURE_OBJECT_ICONS, type CanonicalSystem } from "../../architectureCanvasModel";
 import type { TraceObjectRef } from "../../workbench/workbenchTypes";
 import ObjectTracePanel from "./ObjectTracePanel";
+import UnifiedInspector from "../inspector/UnifiedInspector";
 import type { SaveStatus } from "./ArchitectureTopBar";
 
 type UpdatePayload = {
@@ -94,109 +95,119 @@ export default function ArchitectureObjectInspector({
     }
   }
 
-  return (
-    <aside className="architecture-relationship-panel architecture-object-inspector" aria-label="Object details">
-      <header>
-        <div>
-          <p className="eyebrow">OBJECT INSPECTOR</p>
-          <h3>
-            <span className="architecture-inspector-type-icon" aria-hidden="true">
-              {object ? ARCHITECTURE_OBJECT_ICONS[object.kind] : "▣"}
-            </span>
-            {object ? LABELS[object.kind] : "System"}
-          </h3>
-        </div>
-        <div className="studio-inspector-actions">
-          <button type="button" className="secondary-button" aria-label="Collapse object inspector" onClick={onCollapse}>›</button>
-          <button
-          type="button"
-          className="secondary-button"
-          aria-label="Close object inspector"
-          onClick={onClose}
-        >
-          ✕
+  const properties = system ? (
+    <>
+      <strong>{system.name}</strong>
+      <p><strong>Kind:</strong> {system.kind}</p>
+      {system.description && <p>{system.description}</p>}
+      {onOpenCatalog && (
+        <button type="button" className="secondary-button" onClick={onOpenCatalog}>
+          Open catalog
         </button>
-        </div>
-      </header>
-      <p className="studio-inspector-state">{stateName} · {readOnly ? "Read-only properties" : "Editable"} <span>{saveStatus === "idle" ? "" : saveStatus}</span></p>
-      <small className="studio-object-identifier" title={occurrenceId}>{object?.id ?? system?.id}</small>
-      {system ? (
+      )}
+    </>
+  ) : object ? (
+    <form className="architecture-object-form" onSubmit={(event) => void submit(event)}>
+      <label>
+        Name
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          maxLength={160}
+          required
+          disabled={readOnly || saving}
+        />
+      </label>
+      <label>
+        Description
+        <textarea
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+          maxLength={500}
+          rows={3}
+          disabled={readOnly || saving}
+        />
+      </label>
+      {object.kind === "information_object" && (
         <>
-          <strong>{system.name}</strong>
-          <p><strong>Kind:</strong> {system.kind}</p>
-          {system.description && <p>{system.description}</p>}
-          {onOpenCatalog && (
-            <button type="button" className="secondary-button" onClick={onOpenCatalog}>
-              Open catalog
-            </button>
-          )}
-        </>
-      ) : object ? (
-        <form className="architecture-object-form" onSubmit={(event) => void submit(event)}>
           <label>
-            Name
+            Owner
             <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
+              value={owner}
+              onChange={(event) => setOwner(event.target.value)}
               maxLength={160}
               required
               disabled={readOnly || saving}
             />
           </label>
-          <label>
-            Description
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              maxLength={500}
-              rows={3}
-              disabled={readOnly || saving}
-            />
-          </label>
-          {object.kind === "information_object" && (
-            <>
-              <label>
-                Owner
-                <input
-                  value={owner}
-                  onChange={(event) => setOwner(event.target.value)}
-                  maxLength={160}
-                  required
-                  disabled={readOnly || saving}
-                />
-              </label>
-              <p>
-                <strong>Authoritative system:</strong>{" "}
-                {systems.find((item) => item.id === object.authoritative_system_id)?.name
-                  ?? "Unavailable"}
-              </p>
-            </>
-          )}
-          {error && <p className="error" role="alert">{error}</p>}
-          {readOnly ? (
-            <p className="architecture-topbar-hint">Properties shared with Current are read-only here.</p>
-          ) : (
-            <button type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save object"}
-            </button>
-          )}
-        </form>
-      ) : null}
-      <section className="studio-inspector-relationships">
-        <h4>Relationships <span>{relationships.length}</span></h4>
-        {relationships.length === 0 ? <p className="muted">No visible relationships.</p> : relationships.map((relationship) => (
-          <button key={relationship.id} type="button" className="secondary-button" onClick={() => onSelectRelationship(relationship.id)}>{relationship.label}</button>
-        ))}
-      </section>
-      {workspaceId && (object || system) && (
-        <ObjectTracePanel
-          workspaceId={workspaceId}
-          stateId={stateId ?? null}
-          objectId={object?.id ?? system?.id ?? null}
-          onNavigate={onNavigateTrace}
-        />
+          <p>
+            <strong>Authoritative system:</strong>{" "}
+            {systems.find((item) => item.id === object.authoritative_system_id)?.name
+              ?? "Unavailable"}
+          </p>
+        </>
       )}
-      {onRemove && <button type="button" className="secondary-button architecture-danger" onClick={onRemove}>Remove from this state</button>}
-    </aside>
+      {error && <p className="error" role="alert">{error}</p>}
+      {readOnly ? (
+        <p className="architecture-topbar-hint">Properties shared with Current are read-only here.</p>
+      ) : (
+        <button type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Save object"}
+        </button>
+      )}
+    </form>
+  ) : null;
+
+  const relationshipsPanel = (
+    <section className="studio-inspector-relationships">
+      <h4>Relationships <span>{relationships.length}</span></h4>
+      {relationships.length === 0 ? <p className="muted">No visible relationships.</p> : relationships.map((relationship) => (
+        <button key={relationship.id} type="button" className="secondary-button" onClick={() => onSelectRelationship(relationship.id)}>{relationship.label}</button>
+      ))}
+    </section>
+  );
+
+  const traceability = workspaceId && (object || system) ? (
+    <ObjectTracePanel
+      workspaceId={workspaceId}
+      stateId={stateId ?? null}
+      objectId={object?.id ?? system?.id ?? null}
+      onNavigate={onNavigateTrace}
+    />
+  ) : (
+    <p className="muted">Traceability is unavailable for this object.</p>
+  );
+
+  return (
+    <UnifiedInspector
+      ariaLabel="Object details"
+      eyebrow="OBJECT INSPECTOR"
+      title={(
+        <>
+          <span className="architecture-inspector-type-icon" aria-hidden="true">
+            {object ? ARCHITECTURE_OBJECT_ICONS[object.kind] : "▣"}
+          </span>
+          {object ? LABELS[object.kind] : "System"}
+        </>
+      )}
+      identifier={object?.id ?? system?.id}
+      stateName={stateName}
+      status={readOnly ? "Read-only properties" : "Editable"}
+      saveStatus={saveStatus}
+      collapseLabel="Collapse object inspector"
+      closeLabel="Close object inspector"
+      onCollapse={onCollapse}
+      onClose={onClose}
+      panels={[
+        { id: "properties", label: "Properties", content: properties },
+        { id: "relationships", label: "Relationships", count: relationships.length, content: relationshipsPanel },
+        { id: "traceability", label: "Traceability", content: traceability },
+      ]}
+      footer={onRemove ? (
+        <button type="button" className="secondary-button architecture-danger" onClick={onRemove}>
+          Remove from this state
+        </button>
+      ) : undefined}
+    />
   );
 }

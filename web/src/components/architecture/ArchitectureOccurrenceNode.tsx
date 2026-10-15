@@ -1,5 +1,13 @@
 import React from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { handleId, type FlowSide } from "./architectureRouting";
+
+const SIDES: { side: FlowSide; position: Position }[] = [
+  { side: "top", position: Position.Top },
+  { side: "right", position: Position.Right },
+  { side: "bottom", position: Position.Bottom },
+  { side: "left", position: Position.Left },
+];
 
 export type ArchitectureOccurrenceNodeData = {
   occurrenceId: string;
@@ -30,7 +38,24 @@ export default function ArchitectureOccurrenceNodeCard({
       data-occurrence-id={data.occurrenceId}
       data-object-id={data.objectId}
     >
-      <Handle type="target" position={Position.Left} isConnectable={data.editable} />
+      {SIDES.map(({ side, position }) => (
+        <Handle
+          key={`t-${side}`}
+          id={handleId("target", side)}
+          type="target"
+          position={position}
+          isConnectable={data.editable}
+        />
+      ))}
+      {SIDES.map(({ side, position }) => (
+        <Handle
+          key={`s-${side}`}
+          id={handleId("source", side)}
+          type="source"
+          position={position}
+          isConnectable={data.editable}
+        />
+      ))}
       <header>
         <span className="architecture-node-icon" style={{ color: data.color }} aria-hidden="true">
           {data.icon || data.label.slice(0, 1).toUpperCase()}
@@ -55,7 +80,6 @@ export default function ArchitectureOccurrenceNodeCard({
       </header>
       <strong className="architecture-node-name" title={data.label}>{data.label}</strong>
       <small title={data.description}>{data.missing ? "Canonical object unavailable" : data.description || data.kind || "System"}</small>
-      <Handle type="source" position={Position.Right} isConnectable={data.editable} />
     </article>
   );
 }

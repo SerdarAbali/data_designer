@@ -314,6 +314,7 @@ describe("workbench trace navigation", () => {
 
     render(<ArchitectureCanvas {...props} />);
     fireEvent.click(await screen.findByRole("button", { name: /Payment processing/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Traceability" }));
     fireEvent.click(await screen.findByRole("button", { name: /Customer push/ }));
     expect(await screen.findByRole("heading", { name: "Customer push", level: 3 })).toBeTruthy();
     // Same workspace and state survive the workbench switch.

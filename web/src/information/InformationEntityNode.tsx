@@ -1,6 +1,20 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
-import { attributeSummary, keyBadge, type InformationEntity } from "./informationModel";
+import {
+  attributeSummary,
+  handleId,
+  keyBadge,
+  type InformationEntity,
+  type InformationFlowSide,
+} from "./informationModel";
+
+const SIDES: { side: InformationFlowSide; position: Position }[] = [
+  { side: "top", position: Position.Top },
+  { side: "right", position: Position.Right },
+  { side: "bottom", position: Position.Bottom },
+  { side: "left", position: Position.Left },
+];
+
 
 export type InformationEntityNodeData = {
   entity: InformationEntity;
@@ -20,7 +34,24 @@ export default function InformationEntityNode({ data, selected }: NodeProps<Info
       data-object-id={entity.object_id}
       data-occurrence-id={entity.occurrence_id}
     >
-      <Handle type="target" position={Position.Left} isConnectable={editable} />
+      {SIDES.map(({ side, position }) => (
+        <Handle
+          key={`t-${side}`}
+          id={handleId("target", side)}
+          type="target"
+          position={position}
+          isConnectable={editable}
+        />
+      ))}
+      {SIDES.map(({ side, position }) => (
+        <Handle
+          key={`s-${side}`}
+          id={handleId("source", side)}
+          type="source"
+          position={position}
+          isConnectable={editable}
+        />
+      ))}
       <header>
         <span className="information-entity-icon" aria-hidden="true">
           {entity.name.slice(0, 1).toUpperCase()}
@@ -60,7 +91,6 @@ export default function InformationEntityNode({ data, selected }: NodeProps<Info
           ))}
         </ul>
       )}
-      <Handle type="source" position={Position.Right} isConnectable={editable} />
     </article>
   );
 }

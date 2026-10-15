@@ -422,3 +422,159 @@ def test_candidate_relationships_cannot_mutate_current_baseline(client):
         edge = db.get(ArchitectureRelationship, UUID(relationship_id))
         assert edge is not None
         assert (edge.properties or {}).get("cardinality") == "one_to_many"
+
+
+def test_relationship_handles_persist_reconnect_and_reset(client):
+    test_client, _ = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    customer = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Customer", {"x": 0, "y": 0}
+    )
+    order = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Order", {"x": 300, "y": 0}
+    )
+    invoice = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Invoice", {"x": 600, "y": 0}
+    )
+    source_id = customer["entity"]["object_id"]
+    target_id = order["entity"]["object_id"]
+    third_id = invoice["entity"]["object_id"]
+
+    created = test_client.post(
+        f"/api/workspaces/{workspace_id}/information/relationships",
+        json={
+            "state_id": candidate["id"],
+            "source_object_id": source_id,
+            "target_object_id": target_id,
+            "cardinality": "one_to_many",
+            "source_handle": "s-top",
+            "target_handle": "t-top",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    relationship_id = created.json()["id"]
+    assert created.json()["source_handle"] == "s-top"
+    assert created.json()["target_handle"] == "t-top"
+
+    # Reload preserves the manually selected handles.
+    model = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/model",
+        params={"state_id": candidate["id"]},
+    ).json()
+    relationship = next(r for r in model["relationships"] if r["id"] == relationship_id)
+    assert relationship["source_handle"] == "s-top"
+    assert relationship["target_handle"] == "t-top"
+
+    # A different manual selection (bottom -> left) is preserved too.
+    updated = test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/relationships/{relationship_id}",
+        params={"state_id": candidate["id"]},
+        json={"source_handle": "s-bottom", "target_handle": "t-left"},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["source_handle"] == "s-bottom"
+    assert updated.json()["target_handle"] == "t-left"
+
+    # Reconnection may also move an endpoint onto another entity handle.
+    reconnected = test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/relationships/{relationship_id}",
+        params={"state_id": candidate["id"]},
+        json={"target_object_id": third_id, "target_handle": "t-right"},
+        headers=headers,
+    )
+    assert reconnected.status_code == 200, reconnected.text
+    assert reconnected.json()["target_object_id"] == third_id
+    assert reconnected.json()["target_handle"] == "t-right"
+
+    # Reset to automatic routing clears the stored manual handles.
+    reset = test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/relationships/{relationship_id}",
+        params={"state_id": candidate["id"]},
+        json={"source_handle": None, "target_handle": None},
+        headers=headers,
+    )
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["source_handle"] is None
+    assert reset.json()["target_handle"] is None
+
+    model_after = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/model",
+        params={"state_id": candidate["id"]},
+    ).json()
+    relationship_after = next(
+        r for r in model_after["relationships"] if r["id"] == relationship_id
+    )
+    assert relationship_after["source_handle"] is None
+    assert relationship_after["target_handle"] is None
+
+
+def test_candidate_relationship_handle_changes_do_not_affect_current(client):
+    test_client, testing_sessions = client
+    headers = csrf_headers(test_client)
+    workspace, current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    source = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Customer", {"x": 0, "y": 0}
+    )
+    target = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Order", {"x": 300, "y": 0}
+    )
+    source_id = source["entity"]["object_id"]
+    target_id = target["entity"]["object_id"]
+
+    created = test_client.post(
+        f"/api/workspaces/{workspace_id}/information/relationships",
+        json={
+            "state_id": candidate["id"],
+            "source_object_id": source_id,
+            "target_object_id": target_id,
+            "cardinality": "one_to_many",
+            "source_handle": "s-top",
+            "target_handle": "t-top",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    relationship_id = created.json()["id"]
+
+    # The candidate relationship (and its handles) never leak into Current.
+    current_model = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/model",
+        params={"state_id": current["id"]},
+    ).json()
+    assert current_model["entities"] == []
+    assert current_model["relationships"] == []
+
+    # Manual handle changes in the candidate persist for that state.
+    changed = test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/relationships/{relationship_id}",
+        params={"state_id": candidate["id"]},
+        json={"source_handle": "s-bottom", "target_handle": "t-left"},
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["source_handle"] == "s-bottom"
+
+    # Promote the edge to a committed baseline; candidate edits are rejected.
+    with testing_sessions.begin() as db:
+        edge = db.get(ArchitectureRelationship, UUID(relationship_id))
+        edge.created_in_state_id = None
+
+    blocked = test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/relationships/{relationship_id}",
+        params={"state_id": candidate["id"]},
+        json={"source_handle": "s-right", "target_handle": "t-right"},
+        headers=headers,
+    )
+    assert blocked.status_code == 409, blocked.text
+
+    with testing_sessions() as db:
+        edge = db.get(ArchitectureRelationship, UUID(relationship_id))
+        assert (edge.properties or {}).get("source_handle") == "s-bottom"
+        assert (edge.properties or {}).get("target_handle") == "t-left"

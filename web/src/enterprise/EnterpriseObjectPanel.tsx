@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
+import UnifiedInspector from "../components/inspector/UnifiedInspector";
 import {
   ENTERPRISE_LABELS,
   ENTERPRISE_LINK_RULES,
@@ -10,7 +11,6 @@ import {
   ENTERPRISE_ROLE_TYPES,
   endpointName,
   endpointsFor,
-  type EnterpriseLink,
   type EnterpriseLinkType,
   type EnterpriseModel,
   type EnterpriseObject,
@@ -34,6 +34,7 @@ type Props = {
   onSelectObject: (objectId: string) => void;
   onClose: () => void;
   onCollapse: () => void;
+  trace?: ReactNode;
 };
 
 export default function EnterpriseObjectPanel({
@@ -50,6 +51,7 @@ export default function EnterpriseObjectPanel({
   onSelectObject,
   onClose,
   onCollapse,
+  trace,
 }: Props) {
   const [name, setName] = useState(object.name);
   const [description, setDescription] = useState(object.description ?? "");
@@ -129,40 +131,8 @@ export default function EnterpriseObjectPanel({
     onSave(object.object_id, patch);
   }
 
-  return (
-    <aside
-      className="architecture-relationship-panel enterprise-panel"
-      aria-label="Enterprise object details"
-    >
-      <header>
-        <div>
-          <p className="eyebrow">{ENTERPRISE_LABELS[object.kind]?.toUpperCase()}</p>
-          <h3>{object.name}</h3>
-        </div>
-        <div className="studio-inspector-actions">
-          <button
-            type="button"
-            className="secondary-button"
-            aria-label="Collapse object inspector"
-            onClick={onCollapse}
-          >
-            ›
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            aria-label="Close object details"
-            onClick={onClose}
-          >
-            ✕
-          </button>
-        </div>
-      </header>
-      <p className="studio-inspector-state">
-        {stateName} · {editable ? "Editable" : "Read-only"}{" "}
-        <span>{saveStatus === "idle" ? "" : saveStatus}</span>
-      </p>
-
+  const properties = (
+    <>
       <label>
         Name
         <input value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} />
@@ -281,101 +251,124 @@ export default function EnterpriseObjectPanel({
           </button>
         </div>
       )}
+    </>
+  );
 
-      <section className="enterprise-links-section">
-        <div className="information-section-heading">
-          <strong>Relationships</strong>
-          <span className="item-count">{connections.length}</span>
-        </div>
-        {connections.length === 0 ? (
-          <p className="architecture-topbar-hint">No typed dependencies yet.</p>
-        ) : (
-          <ul className="enterprise-link-list">
-            {connections.map((link) => {
-              const outgoing = link.source_object_id === object.object_id;
-              const partnerId = outgoing ? link.target_object_id : link.source_object_id;
-              return (
-                <li key={link.id}>
+  const relationshipsPanel = (
+    <section className="enterprise-links-section">
+      <div className="information-section-heading">
+        <strong>Relationships</strong>
+        <span className="item-count">{connections.length}</span>
+      </div>
+      {connections.length === 0 ? (
+        <p className="architecture-topbar-hint">No typed dependencies yet.</p>
+      ) : (
+        <ul className="enterprise-link-list">
+          {connections.map((link) => {
+            const outgoing = link.source_object_id === object.object_id;
+            const partnerId = outgoing ? link.target_object_id : link.source_object_id;
+            return (
+              <li key={link.id}>
+                <button
+                  type="button"
+                  className="enterprise-link-endpoint"
+                  onClick={() => onSelectObject(partnerId)}
+                >
+                  {endpointName(model, partnerId)}
+                </button>
+                <span className="enterprise-link-verb">
+                  {outgoing ? "→" : "←"} {ENTERPRISE_LABELS[link.relationship_type] ?? link.relationship_type}
+                </span>
+                {editable && (
                   <button
                     type="button"
-                    className="enterprise-link-endpoint"
-                    onClick={() => onSelectObject(partnerId)}
+                    className="secondary-button"
+                    onClick={() => onDeleteLink(link.id)}
                   >
-                    {endpointName(model, partnerId)}
+                    Remove
                   </button>
-                  <span className="enterprise-link-verb">
-                    {outgoing ? "→" : "←"} {ENTERPRISE_LABELS[link.relationship_type] ?? link.relationship_type}
-                  </span>
-                  {editable && (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => onDeleteLink(link.id)}
-                    >
-                      Remove
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
-        {editable && applicableLinkTypes.length > 0 && (
-          <form className="enterprise-link-form" onSubmit={submitLink}>
-            <p className="studio-menu-caption">New relationship</p>
-            <label>
-              Type
-              <select
-                value={linkType}
-                onChange={(event) => {
-                  setLinkType(event.target.value as EnterpriseLinkType);
-                  setLinkPartner("");
-                }}
-              >
-                {applicableLinkTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {ENTERPRISE_LABELS[type] ?? type}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Direction
-              <select
-                value={
-                  ENTERPRISE_LINK_RULES[linkType].sources.includes(object.kind) ? linkDirection : "incoming"
-                }
-                onChange={(event) => {
-                  setLinkDirection(event.target.value as "outgoing" | "incoming");
-                  setLinkPartner("");
-                }}
-              >
-                {ENTERPRISE_LINK_RULES[linkType].sources.includes(object.kind) && (
-                  <option value="outgoing">This object is the source</option>
-                )}
-                {ENTERPRISE_LINK_RULES[linkType].targets.includes(object.kind) && (
-                  <option value="incoming">This object is the target</option>
-                )}
-              </select>
-            </label>
-            <label>
-              Other object
-              <select value={linkPartner} onChange={(event) => setLinkPartner(event.target.value)}>
-                <option value="">Select…</option>
-                {endpoints.map((endpoint) => (
-                  <option key={endpoint.id} value={endpoint.id}>
-                    {endpoint.name} · {ENTERPRISE_LABELS[endpoint.kind] ?? endpoint.kind}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="submit" disabled={busy || !linkPartner}>
-              Add relationship
-            </button>
-          </form>
-        )}
-      </section>
-    </aside>
+      {editable && applicableLinkTypes.length > 0 && (
+        <form className="enterprise-link-form" onSubmit={submitLink}>
+          <p className="studio-menu-caption">New relationship</p>
+          <label>
+            Type
+            <select
+              value={linkType}
+              onChange={(event) => {
+                setLinkType(event.target.value as EnterpriseLinkType);
+                setLinkPartner("");
+              }}
+            >
+              {applicableLinkTypes.map((type) => (
+                <option key={type} value={type}>
+                  {ENTERPRISE_LABELS[type] ?? type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Direction
+            <select
+              value={
+                ENTERPRISE_LINK_RULES[linkType].sources.includes(object.kind) ? linkDirection : "incoming"
+              }
+              onChange={(event) => {
+                setLinkDirection(event.target.value as "outgoing" | "incoming");
+                setLinkPartner("");
+              }}
+            >
+              {ENTERPRISE_LINK_RULES[linkType].sources.includes(object.kind) && (
+                <option value="outgoing">This object is the source</option>
+              )}
+              {ENTERPRISE_LINK_RULES[linkType].targets.includes(object.kind) && (
+                <option value="incoming">This object is the target</option>
+              )}
+            </select>
+          </label>
+          <label>
+            Other object
+            <select value={linkPartner} onChange={(event) => setLinkPartner(event.target.value)}>
+              <option value="">Select…</option>
+              {endpoints.map((endpoint) => (
+                <option key={endpoint.id} value={endpoint.id}>
+                  {endpoint.name} · {ENTERPRISE_LABELS[endpoint.kind] ?? endpoint.kind}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={busy || !linkPartner}>
+            Add relationship
+          </button>
+        </form>
+      )}
+    </section>
+  );
+
+  return (
+    <UnifiedInspector
+      ariaLabel="Enterprise object details"
+      eyebrow={ENTERPRISE_LABELS[object.kind]?.toUpperCase() ?? "ENTERPRISE"}
+      title={object.name}
+      identifier={object.object_id}
+      stateName={stateName}
+      status={editable ? "Editable" : "Read-only"}
+      saveStatus={saveStatus}
+      collapseLabel="Collapse object inspector"
+      closeLabel="Close object details"
+      onCollapse={onCollapse}
+      onClose={onClose}
+      panels={[
+        { id: "properties", label: "Properties", content: properties },
+        { id: "relationships", label: "Relationships", count: connections.length, content: relationshipsPanel },
+        { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
+      ]}
+    />
   );
 }

@@ -550,21 +550,17 @@ export default function SolutionWorkbench({
             }))}
             onClose={() => setSelectedComponentId(null)}
             onCollapse={() => setInspectorCollapsed(true)}
+            trace={(
+              <ObjectTracePanel
+                workspaceId={workspaceId}
+                stateId={stateId || null}
+                objectId={selectedComponent.object_id}
+                onNavigate={onNavigateTrace}
+              />
+            )}
           />
         )}
 
-        {!inspectorCollapsed && selectedComponent && (
-          <ObjectTracePanel
-            workspaceId={workspaceId}
-            stateId={stateId || null}
-            objectId={
-              selectedOperation?.object_id ??
-              selectedInterface?.object_id ??
-              selectedComponent.object_id
-            }
-            onNavigate={onNavigateTrace}
-          />
-        )}
       </div>
     </div>
   );

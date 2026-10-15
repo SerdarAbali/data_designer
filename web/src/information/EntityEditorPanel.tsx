@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
+import UnifiedInspector from "../components/inspector/UnifiedInspector";
 import { attributeSummary, keyBadge, type InformationAttribute, type InformationEntity } from "./informationModel";
 
 export type AttributeDraft = {
@@ -34,6 +35,8 @@ type Props = {
   onAddAttribute: (draft: AttributeDraft) => void;
   onClose: () => void;
   onCollapse: () => void;
+  relationships?: ReactNode;
+  trace?: ReactNode;
 };
 
 const EMPTY_DRAFT: AttributeDraft = {
@@ -57,6 +60,8 @@ export default function EntityEditorPanel({
   onAddAttribute,
   onClose,
   onCollapse,
+  relationships,
+  trace,
 }: Props) {
   const [name, setName] = useState(entity.name);
   const [description, setDescription] = useState(entity.description ?? "");
@@ -81,20 +86,8 @@ export default function EntityEditorPanel({
     setDraft(EMPTY_DRAFT);
   }
 
-  return (
-    <aside className="architecture-relationship-panel information-panel" aria-label="Entity details">
-      <header>
-        <div>
-          <p className="eyebrow">ENTITY</p>
-          <h3>{entity.name}</h3>
-        </div>
-        <div className="studio-inspector-actions">
-          <button type="button" className="secondary-button" aria-label="Collapse entity inspector" onClick={onCollapse}>›</button>
-          <button type="button" className="secondary-button" aria-label="Close entity details" onClick={onClose}>✕</button>
-        </div>
-      </header>
-      <p className="studio-inspector-state">{stateName} · {editable ? "Editable" : "Read-only"} <span>{saveStatus === "idle" ? "" : saveStatus}</span></p>
-
+  const properties = (
+    <>
       <label>
         Name
         <input value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} />
@@ -208,6 +201,27 @@ export default function EntityEditorPanel({
           </form>
         )}
       </section>
-    </aside>
+    </>
+  );
+
+  return (
+    <UnifiedInspector
+      ariaLabel="Entity details"
+      eyebrow="ENTITY"
+      title={entity.name}
+      identifier={entity.object_id}
+      stateName={stateName}
+      status={editable ? "Editable" : "Read-only"}
+      saveStatus={saveStatus}
+      collapseLabel="Collapse entity inspector"
+      closeLabel="Close entity details"
+      onCollapse={onCollapse}
+      onClose={onClose}
+      panels={[
+        { id: "properties", label: "Properties", content: properties },
+        { id: "relationships", label: "Relationships", content: relationships ?? <p className="muted">No relationships.</p> },
+        { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
+      ]}
+    />
   );
 }

@@ -1,21 +1,22 @@
-export type InspectorTab = "general" | "schema" | "metadata";
+export type InspectorTab = string;
 
-const tabs: { id: InspectorTab; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "schema", label: "Schema" },
-  { id: "metadata", label: "Raw metadata JSON" },
-];
-
-type Props = {
-  value: InspectorTab;
-  onChange: (tab: InspectorTab) => void;
-  includeSchema?: boolean;
+export type InspectorTabItem = {
+  id: string;
+  label: string;
 };
 
-export default function InspectorTabs({ value, onChange, includeSchema = true }: Props) {
+type Props = {
+  tabs: InspectorTabItem[];
+  value: string;
+  onChange: (tab: string) => void;
+  ariaLabel?: string;
+};
+
+/** Generic tab strip for catalog inspectors. */
+export default function InspectorTabs({ tabs, value, onChange, ariaLabel = "Details" }: Props) {
   return (
-    <nav className="inspector-tabs" aria-label="Entity details">
-      {tabs.filter((tab) => includeSchema || tab.id !== "schema").map((tab) => (
+    <nav className="inspector-tabs" aria-label={ariaLabel}>
+      {tabs.map((tab) => (
         <button
           type="button"
           key={tab.id}

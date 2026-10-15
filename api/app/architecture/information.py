@@ -337,6 +337,8 @@ def _build_model(
                 cardinality=properties.get("cardinality", "one_to_many"),
                 source_optional=bool(properties.get("source_optional", False)),
                 target_optional=bool(properties.get("target_optional", True)),
+                source_handle=properties.get("source_handle"),
+                target_handle=properties.get("target_handle"),
             )
         )
 
@@ -829,6 +831,8 @@ def create_information_relationship(
             "cardinality": payload.cardinality,
             "source_optional": payload.source_optional,
             "target_optional": payload.target_optional,
+            "source_handle": payload.source_handle,
+            "target_handle": payload.target_handle,
         },
         created_in_state_id=state.id,
     )
@@ -843,6 +847,8 @@ def create_information_relationship(
         cardinality=payload.cardinality,
         source_optional=payload.source_optional,
         target_optional=payload.target_optional,
+        source_handle=payload.source_handle,
+        target_handle=payload.target_handle,
     )
 
 
@@ -876,6 +882,36 @@ def update_information_relationship(
 
     properties = dict(edge.properties or {})
     changes = payload.model_dump(exclude_unset=True)
+    # Reconnection reassigns the endpoint columns rather than edge properties.
+    new_source = changes.pop("source_object_id", None)
+    new_target = changes.pop("target_object_id", None)
+    if new_source is not None or new_target is not None:
+        source_id = new_source if new_source is not None else edge.source_object_id
+        target_id = new_target if new_target is not None else edge.target_object_id
+        if source_id == target_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A relationship must connect two different entities",
+            )
+        _get_entity(db, workspace, source_id)
+        _get_entity(db, workspace, target_id)
+        duplicate = db.scalar(
+            select(ArchitectureRelationship).where(
+                ArchitectureRelationship.tenant_id == workspace.tenant_id,
+                ArchitectureRelationship.relationship_type == ER_EDGE_TYPE,
+                ArchitectureRelationship.source_object_id == source_id,
+                ArchitectureRelationship.target_object_id == target_id,
+                ArchitectureRelationship.id != edge.id,
+            )
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This relationship already exists",
+            )
+        edge.source_object_id = source_id
+        edge.target_object_id = target_id
+
     properties.update(changes)
     edge.properties = properties
     db.commit()
@@ -889,6 +925,8 @@ def update_information_relationship(
         cardinality=properties.get("cardinality", "one_to_many"),
         source_optional=bool(properties.get("source_optional", False)),
         target_optional=bool(properties.get("target_optional", True)),
+        source_handle=properties.get("source_handle"),
+        target_handle=properties.get("target_handle"),
     )
 
 

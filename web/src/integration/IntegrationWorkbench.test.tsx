@@ -279,6 +279,20 @@ describe("IntegrationWorkbench", () => {
     });
   });
 
+  it("keeps one contract selected across subviews via the compact selector", async () => {
+    const onOpenIntegration = vi.fn();
+    renderWorkbench({ onOpenIntegration });
+    const picker = await screen.findByLabelText("Contract");
+    expect((picker as HTMLSelectElement).value).toBe("");
+    fireEvent.change(picker, { target: { value: "int-1" } });
+    expect(await screen.findByText(/CRM · Customer → ERP · Account/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Message Flow" }));
+    await screen.findByText("Route by region");
+    expect((screen.getByLabelText("Contract") as HTMLSelectElement).value).toBe("int-1");
+    fireEvent.change(screen.getByLabelText("Contract"), { target: { value: "__new__" } });
+    expect(onOpenIntegration).toHaveBeenCalledWith("");
+  });
+
   it("disables property editing when the state is read-only", async () => {
     renderWorkbench({ editable: false });
     await screen.findByText("Customer push");
