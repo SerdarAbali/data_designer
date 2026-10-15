@@ -82,15 +82,17 @@ Mutating requests send the `dd_csrf` cookie value in the `X-CSRF-Token` header.
 |---|---|
 | `api/app/auth` | Login, sessions, CSRF |
 | `api/app/catalog` | Systems, objects, fields |
+| `api/app/imports` | Guided Excel/CSV architecture import: preview, commit, batches, undo |
 | `api/app/integrations` | Contracts, graphs, dry-run, dependencies, architecture analysis |
 | `api/app/scenarios` | Design-time scenarios and sample evaluation |
 | `api/app/engine` | Transformation engine used by dry-run and scenario evaluation |
 | `api/app/models` | SQLAlchemy models |
-| `api/alembic/versions` | Database migrations (`0001` … `0007`) |
+| `api/alembic/versions` | Database migrations (`0001` … `0011`) |
 | `api/app/cli.py` | `create-initial-user`, `load-demo-catalog` |
 | `api/tests` | pytest suite |
 | `web/src` | React app (`CatalogWorkspace`, `IntegrationWorkspace`, `EnterpriseLandscape`, `components/*`) and vitest tests |
 | `docs/` | User guide, data model, API plan, engine spec, implementation log |
+| `fixtures/architecture-import` | Sample CSV/`.xlsx` files and the twelve-step import verification script |
 | `backups/` | Local database dumps taken before migrations |
 
 ## Development workflow

@@ -1,0 +1,5 @@
+Name,Description,Owner,Domain,Lifecycle,Status,Technology,External ID,Aliases
+Payment Gateway,Processes card payments,Payments Team,Payments,active,live,Java,SYS-PG,PayGW; Card Gateway
+Customer CRM,Customer master data,Sales Operations,CRM,active,live,SaaS,SYS-CRM,
+Billing Platform,Subscription billing and invoicing,Finance Systems,Billing,active,live,Oracle,SYS-BILL,
+Legacy Reporting,Reporting to be retired,BI Team,Analytics,retiring,deprecated,SSRS,SYS-REP,

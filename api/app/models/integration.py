@@ -47,6 +47,18 @@ class Integration(Base):
             name="fk_integrations_error_response_object",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["producer_interface_id", "tenant_id"],
+            ["architecture_interfaces.object_id", "architecture_interfaces.tenant_id"],
+            name="fk_integrations_producer_interface",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["consumer_interface_id", "tenant_id"],
+            ["architecture_interfaces.object_id", "architecture_interfaces.tenant_id"],
+            name="fk_integrations_consumer_interface",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("id", "tenant_id", name="uq_integrations_id_tenant"),
         Index(
             "uq_integrations_active_name",
@@ -55,6 +67,14 @@ class Integration(Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_integrations_active_external_id",
+            "tenant_id",
+            "external_identifier",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
         ),
         CheckConstraint(
             "jsonb_typeof(graph) = 'object'",
@@ -71,6 +91,10 @@ class Integration(Base):
         CheckConstraint(
             "interaction_type IN ('ONE_WAY', 'REQUEST_RESPONSE', 'ASYNC_CALLBACK')",
             name="ck_integrations_interaction_type",
+        ),
+        CheckConstraint(
+            "implementation_status IN ('draft', 'in_progress', 'built', 'verified')",
+            name="ck_integrations_implementation_status",
         ),
         CheckConstraint(
             "jsonb_typeof(trigger_config) = 'object'",
@@ -113,7 +137,18 @@ class Integration(Base):
     interaction_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="ONE_WAY"
     )
+    pattern: Mapped[str | None] = mapped_column(String(60))
+    implementation_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft"
+    )
+    producer_interface_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    consumer_interface_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    specification: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
     sample_rows: Mapped[list] = mapped_column(json_type, nullable=False, default=list)
+    external_identifier: Mapped[str | None] = mapped_column(String(255))
+    extra_metadata: Mapped[dict] = mapped_column(
+        "metadata", json_type, nullable=False, default=dict
+    )
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

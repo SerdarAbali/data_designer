@@ -100,7 +100,38 @@ Node/edge IDs are UUIDs; the API persists camelCase edge endpoint keys in JSON. 
 
 The graph and API contracts are also defined in [engine-spec.md](./engine-spec.md) and [api-plan.md](./api-plan.md).
 
-## 6. Security and data handling
+## 6. Architecture imports and provenance
+
+`import_batches` records one guided import per file and sheet: `tenant_id`,
+`workspace_id`, `source_filename`, `sheet_name`, `import_type` (`system`,
+`information_object`, `integration`, `solution`), `status` (`applied`,
+`undone`, `undo_blocked`), a `counts` document, `imported_at`, and `undone_at`.
+`import_row_results` stores one row per source record: `row_number`,
+`external_id`, `action`, `target_kind`, `target_id`, `status`, `message`, and
+`before`/`after` JSON snapshots that make a batch-scoped undo possible without
+re-parsing the source file.
+
+Imported records are ordinary canonical rows. `systems` gains
+`external_identifier` (unique per tenant while active) for external-ID matching,
+and system aliases live in the existing bounded `metadata.aliases` list.
+`information_objects` gains `external_identifier` and `classification`;
+`solution_boundaries` gains `external_identifier` and `owner`; `integrations`
+gains `external_identifier` and a bounded `metadata` document for imported
+owner/lifecycle values. All of these are additive, nullable columns.
+
+`solution_members` is the canonical "solution includes system" membership:
+`solution_object_id`, `system_id`, and `tenant_id` with composite foreign keys to
+`solution_boundaries` and `systems`, a unique pair constraint, and cascading
+deletes. Solutions therefore reference canonical systems instead of containing
+system copies. Imported integrations reuse the existing `integrations` table with
+empty graphs; importing never duplicates or rewrites schemas, mappings,
+transformations, or tests.
+
+Matching is deterministic and layered: external ID, then normalized exact name,
+then an existing alias, and finally a similarity suggestion (ratio ≥ 0.90) that
+is presented for confirmation and never merged automatically.
+
+## 7. Security and data handling
 
 - Store only Argon2id password hashes and hash opaque session tokens at rest.
 - Cookie authentication requires CSRF protection on state-changing routes; do not trust forwarded host/protocol headers unless the proxy is explicitly configured as trusted.

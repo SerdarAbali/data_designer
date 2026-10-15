@@ -9,6 +9,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     Uuid,
     text,
 )
@@ -29,6 +30,7 @@ class Scenario(Base):
             name="fk_scenarios_scope_integration",
             ondelete="RESTRICT",
         ),
+        UniqueConstraint("id", "tenant_id", name="uq_scenarios_id_tenant"),
         Index(
             "uq_scenarios_active_name",
             "tenant_id",

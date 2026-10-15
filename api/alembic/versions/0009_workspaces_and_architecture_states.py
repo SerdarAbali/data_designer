@@ -7,8 +7,9 @@ Revises: 0008_workspaces
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
+
+from alembic import op
 
 revision: str = "0009_architecture_states"
 down_revision: str | None = "0008_workspaces"
@@ -22,7 +23,12 @@ def upgrade() -> None:
     op.create_table(
         "workspaces",
         sa.Column("id", sa.Uuid(), nullable=False, primary_key=True),
-        sa.Column("tenant_id", sa.Uuid(), sa.ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "tenant_id",
+            sa.Uuid(),
+            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("name", sa.String(length=120), nullable=False),
         sa.Column("description", sa.String(length=500), nullable=True),
         sa.Column("disciplines", json_type, nullable=False),
@@ -42,7 +48,12 @@ def upgrade() -> None:
     op.create_table(
         "architecture_states",
         sa.Column("id", sa.Uuid(), nullable=False, primary_key=True),
-        sa.Column("workspace_id", sa.Uuid(), sa.ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "workspace_id",
+            sa.Uuid(),
+            sa.ForeignKey("workspaces.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("name", sa.String(length=160), nullable=False),
         sa.Column("state_type", sa.String(length=32), nullable=False, server_default="current"),
         sa.Column("description", sa.String(length=2000), nullable=True),

@@ -4,6 +4,9 @@ import type {
   ArchitecturePhaseKind,
   EnterpriseArchitectureIndex,
 } from "./enterpriseArchitectureIndex";
+import { isResponsePhase as isResponsePhaseKind } from "./architecturePhases";
+
+export { PHASE_LABELS } from "./architecturePhases";
 
 export type ScenarioCategory = "happy_path" | "alternative" | "error";
 export type ScenarioPhase = ArchitecturePhaseKind;
@@ -109,13 +112,6 @@ export function categoryLabel(category: ScenarioCategory): string {
   return SCENARIO_CATEGORIES.find((item) => item.value === category)?.label ?? category;
 }
 
-export const PHASE_LABELS: Record<ScenarioPhase, string> = {
-  request: "Request",
-  "success-response": "Success response",
-  "error-response": "Error response",
-  "async-response": "Async response",
-};
-
 export const MAX_FRAGMENT_DEPTH = 3;
 
 export function isFragment(item: ScenarioItem): item is ScenarioFragment {
@@ -123,7 +119,7 @@ export function isFragment(item: ScenarioItem): item is ScenarioFragment {
 }
 
 export function isResponsePhase(phase: ScenarioPhase | null | undefined): boolean {
-  return phase === "success-response" || phase === "error-response" || phase === "async-response";
+  return isResponsePhaseKind(phase);
 }
 
 let idCounter = 0;

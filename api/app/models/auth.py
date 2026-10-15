@@ -29,7 +29,9 @@ class Tenant(Base):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    users: Mapped[list["User"]] = relationship(back_populates="tenant", foreign_keys="User.tenant_id")
+    users: Mapped[list["User"]] = relationship(
+        back_populates="tenant", foreign_keys="User.tenant_id"
+    )
 
 
 class User(Base):

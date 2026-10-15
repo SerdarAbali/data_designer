@@ -7,12 +7,13 @@ import {
   type Edge,
   type EdgeProps,
 } from "@xyflow/react";
+import type { ArchitecturePhaseKind } from "../../architecturePhases";
 
 type MapperEdgeData = {
   direction?: "outbound" | "inbound";
   routeOffset?: number;
   straightWhenAligned?: boolean;
-  phase?: "request" | "success-response" | "error-response" | "async-response";
+  phase?: ArchitecturePhaseKind;
   sampleRows?: number;
   status?: "draft" | "attention" | "healthy";
   validationStatus?: "Valid" | "Warning" | "Error" | "Unmapped";

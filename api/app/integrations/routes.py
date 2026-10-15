@@ -42,6 +42,7 @@ from app.integrations.schemas import (
     SimulationResponse,
 )
 from app.models import (
+    ArchitectureObject,
     AuthSession,
     CatalogField,
     CatalogObject,
@@ -107,6 +108,26 @@ def resolve_endpoint(
             "Each integration endpoint must be an active object in its stated system",
         )
     return obj
+
+
+def validate_interface(
+    db: Session, tenant_id: UUID, interface_id: UUID | None
+) -> None:
+    """An interface link must reference an active, tenant-owned interface object."""
+    if interface_id is None:
+        return
+    obj = db.scalar(
+        select(ArchitectureObject).where(
+            ArchitectureObject.id == interface_id,
+            ArchitectureObject.tenant_id == tenant_id,
+            ArchitectureObject.kind == "interface",
+        )
+    )
+    if obj is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Each interface link must reference an active interface object",
+        )
 
 
 def active_fields(db: Session, tenant_id: UUID, object_id: UUID) -> dict[UUID, CatalogField]:
@@ -430,6 +451,8 @@ def create_integration(
     source_fields = active_fields(db, user.tenant_id, payload.source_object_id)
     sample_rows = validate_sample_rows(payload.sample_rows, set(source_fields))
     refs.update(sample_field_references(sample_rows, payload.source_object_id))
+    validate_interface(db, user.tenant_id, payload.producer_interface_id)
+    validate_interface(db, user.tenant_id, payload.consumer_interface_id)
 
     integration = Integration(
         tenant_id=user.tenant_id,
@@ -445,6 +468,11 @@ def create_integration(
         error_response_graph=json_graph(payload.error_response_graph),
         error_response_object_id=payload.error_response_object_id,
         interaction_type=payload.interaction_type,
+        pattern=payload.pattern,
+        implementation_status=payload.implementation_status,
+        producer_interface_id=payload.producer_interface_id,
+        consumer_interface_id=payload.consumer_interface_id,
+        specification=payload.specification.model_dump(mode="json"),
         sample_rows=sample_rows,
         revision=1,
     )
@@ -695,6 +723,12 @@ def update_integration(
     integration = active_integration(db, user.tenant_id, integration_id, lock=True)
     check_revision(integration, payload.expected_revision)
     updates = payload.model_dump(exclude_unset=True, exclude={"expected_revision"})
+    if "specification" in updates:
+        updates["specification"] = payload.specification.model_dump(mode="json")
+    if "producer_interface_id" in updates:
+        validate_interface(db, user.tenant_id, updates["producer_interface_id"])
+    if "consumer_interface_id" in updates:
+        validate_interface(db, user.tenant_id, updates["consumer_interface_id"])
     if "sample_rows" in updates:
         source_fields = active_fields(db, user.tenant_id, integration.source_object_id)
         updates["sample_rows"] = validate_sample_rows(
@@ -822,6 +856,18 @@ def save_integration_graph(
         integration.interaction_type = payload.interaction_type
     if payload.name is not None:
         integration.name = payload.name
+    if payload.pattern is not None:
+        integration.pattern = payload.pattern
+    if payload.implementation_status is not None:
+        integration.implementation_status = payload.implementation_status
+    if "producer_interface_id" in payload.model_fields_set:
+        validate_interface(db, user.tenant_id, payload.producer_interface_id)
+        integration.producer_interface_id = payload.producer_interface_id
+    if "consumer_interface_id" in payload.model_fields_set:
+        validate_interface(db, user.tenant_id, payload.consumer_interface_id)
+        integration.consumer_interface_id = payload.consumer_interface_id
+    if payload.specification is not None:
+        integration.specification = payload.specification.model_dump(mode="json")
     integration.sample_rows = sample_rows
     integration.revision += 1
     integration.updated_at = datetime.now(UTC)

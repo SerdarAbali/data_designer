@@ -112,6 +112,97 @@ body {
   width: auto;
 }
 
+.import-dialog .import-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 16px 0;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--color-border);
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--color-muted, var(--color-ink));
+  opacity: 0.7;
+}
+
+.import-dialog .import-steps li.active {
+  font-weight: 600;
+  opacity: 1;
+}
+
+.import-dialog .import-steps li.done {
+  opacity: 0.9;
+}
+
+.import-selects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 12px 0;
+}
+
+.import-selects label {
+  min-width: 200px;
+}
+
+.import-entry {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.import-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 8px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.import-counts strong {
+  margin-right: 4px;
+}
+
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.import-targets {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-targets label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-targets input {
+  width: auto;
+}
+
+.import-history ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-history li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .page {
   display: grid;
   min-height: 100vh;

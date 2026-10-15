@@ -1,0 +1,96 @@
+{
+  "candidate_name": "Enterprise Demo Draft",
+  "applications": ["Core Banking", "Payments Gateway", "Data Warehouse"],
+  "objects": [
+    {
+      "kind": "goal",
+      "name": "Grow revenue",
+      "owner": "CFO",
+      "outcome_metric": "+10% ARR",
+      "horizon": "FY27",
+      "description": "Grow recurring revenue through real-time payment offerings."
+    },
+    {
+      "kind": "goal",
+      "name": "Reduce risk",
+      "owner": "CRO",
+      "outcome_metric": "Zero critical audit findings",
+      "horizon": "FY27",
+      "description": "Meet regulatory obligations without bespoke manual reporting."
+    },
+    {
+      "kind": "requirement",
+      "name": "Real-time payments",
+      "description": "Customers can send and receive payments instantly."
+    },
+    {
+      "kind": "requirement",
+      "name": "Regulatory reporting",
+      "description": "Regulatory reports are produced from authoritative data."
+    },
+    {
+      "kind": "capability",
+      "name": "Payment processing",
+      "description": "Authorize, clear, and settle payments."
+    },
+    {
+      "kind": "capability",
+      "name": "Customer onboarding",
+      "description": "Verify, approve, and activate customers."
+    },
+    {
+      "kind": "process",
+      "name": "Card settlement",
+      "process_type": "process",
+      "owner": "Payments Ops",
+      "description": "Settle card transactions with the scheme."
+    },
+    {
+      "kind": "process",
+      "name": "Customer KYC",
+      "process_type": "value_stream",
+      "owner": "Risk Office",
+      "description": "End-to-end know-your-customer value stream."
+    },
+    {
+      "kind": "principle",
+      "name": "Data residency",
+      "principle_type": "constraint",
+      "rationale": "Regulated workloads must remain in-region."
+    },
+    {
+      "kind": "principle",
+      "name": "Vendor lock-in",
+      "principle_type": "risk",
+      "rationale": "Settlement depends on a single scheme vendor."
+    },
+    {
+      "kind": "role",
+      "name": "Payments Team",
+      "role_type": "role",
+      "description": "Owns payment capabilities and processes."
+    },
+    {
+      "kind": "role",
+      "name": "Risk Office",
+      "role_type": "organization",
+      "description": "Owns regulatory obligations."
+    }
+  ],
+  "links": [
+    {"relationship_type": "drives", "source": "Grow revenue", "target": "Real-time payments"},
+    {"relationship_type": "drives", "source": "Reduce risk", "target": "Regulatory reporting"},
+    {"relationship_type": "needs", "source": "Real-time payments", "target": "Payment processing"},
+    {"relationship_type": "needs", "source": "Real-time payments", "target": "Customer onboarding"},
+    {"relationship_type": "needs", "source": "Regulatory reporting", "target": "Customer onboarding"},
+    {"relationship_type": "has_process", "source": "Payment processing", "target": "Card settlement"},
+    {"relationship_type": "has_process", "source": "Customer onboarding", "target": "Customer KYC"},
+    {"relationship_type": "supports", "source": "Core Banking", "target": "Payment processing"},
+    {"relationship_type": "supports", "source": "Payments Gateway", "target": "Card settlement"},
+    {"relationship_type": "supports", "source": "Data Warehouse", "target": "Customer KYC"},
+    {"relationship_type": "satisfies", "source": "Data Warehouse", "target": "Regulatory reporting"},
+    {"relationship_type": "governed_by", "source": "Payment processing", "target": "Data residency"},
+    {"relationship_type": "owned_by", "source": "Payment processing", "target": "Payments Team"},
+    {"relationship_type": "depends_on", "source": "Customer onboarding", "target": "Payment processing"}
+  ]
+}

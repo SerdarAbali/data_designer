@@ -13,6 +13,9 @@ from app.architecture.schemas import (
     ArchitectureStateResponse,
     ArchitectureStateUpdate,
     DuplicateStateRequest,
+    IncludeObjectsRequest,
+    IncludeObjectsResponse,
+    IncludeObjectsSkipped,
 )
 from app.auth.dependencies import (
     AuthenticatedUser,
@@ -27,6 +30,7 @@ from app.models import (
     AuthSession,
     CatalogSystem,
     Integration,
+    SolutionMember,
     Workspace,
 )
 from app.workspaces.routes import _ensure_workspace_entity, _user_can_access_workspace
@@ -429,3 +433,237 @@ def delete_architecture_state(
     state.deleted_at = datetime.now(UTC)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+KIND_DISCIPLINE_FOR_INCLUDE = {
+    "business_requirement": "enterprise",
+    "business_capability": "enterprise",
+    "information_object": "information",
+    "solution_boundary": "solution",
+    "component": "solution",
+    "interface": "solution",
+}
+
+
+def _placement(index: int) -> dict[str, float]:
+    column = index % 3
+    row = index // 3
+    return {"x": float(column * 360 + 80), "y": float(row * 200 + 80)}
+
+
+@router.post("/{state_id}/include-objects", response_model=IncludeObjectsResponse)
+def include_objects_in_state(
+    workspace_id: UUID,
+    state_id: UUID,
+    payload: IncludeObjectsRequest,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> IncludeObjectsResponse:
+    """Append explicitly selected imported objects to an architecture state.
+
+    This is the controlled enrichment path for the read-only Current state:
+    only the objects the user selected are placed, and nothing is removed.
+    """
+
+    require_csrf(request, auth_session)
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    state = db.scalar(
+        select(ArchitectureState).where(
+            ArchitectureState.id == state_id,
+            ArchitectureState.workspace_id == workspace.id,
+            ArchitectureState.deleted_at.is_(None),
+        )
+    )
+    if state is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Architecture state not found"
+        )
+
+    nodes = [dict(node) for node in (state.nodes or [])]
+    relationships = [dict(item) for item in (state.relationships or [])]
+    occurrences: dict[str, str] = {
+        str(node.get("object_id")): str(node.get("occurrence_id")) for node in nodes
+    }
+    skipped: list[IncludeObjectsSkipped] = []
+    added_occurrences = 0
+    added_relationships = 0
+    next_index = len(nodes)
+
+    def place(object_id: UUID, discipline: str | None = None) -> str:
+        nonlocal added_occurrences, next_index
+        key = str(object_id)
+        if key in occurrences:
+            return occurrences[key]
+        occurrence_id = f"occ-{uuid4()}"
+        node = ArchitectureStateNode(
+            occurrence_id=occurrence_id,
+            object_id=object_id,
+            position=_placement(next_index),
+            discipline=discipline,
+        ).model_dump(mode="json")
+        nodes.append(node)
+        occurrences[key] = occurrence_id
+        next_index += 1
+        added_occurrences += 1
+        return occurrence_id
+
+    def has_relationship(source_id: str, target_id: str, integration_id: str | None) -> bool:
+        for item in relationships:
+            if integration_id is not None and str(item.get("integration_id")) == integration_id:
+                return True
+            if (
+                integration_id is None
+                and str(item.get("source_id")) == source_id
+                and str(item.get("target_id")) == target_id
+                and item.get("type") == "Contains"
+            ):
+                return True
+        return False
+
+    selected_systems: dict[UUID, CatalogSystem] = {}
+    for system_id in payload.system_ids:
+        system = db.scalar(
+            select(CatalogSystem).where(
+                CatalogSystem.id == system_id,
+                CatalogSystem.tenant_id == workspace.tenant_id,
+                CatalogSystem.deleted_at.is_(None),
+            )
+        )
+        if system is None:
+            skipped.append(
+                IncludeObjectsSkipped(
+                    kind="system",
+                    id=system_id,
+                    message="System is not an active system in this workspace",
+                )
+            )
+            continue
+        selected_systems[system_id] = system
+
+    selected_objects: dict[UUID, ArchitectureObject] = {}
+    for object_id in payload.architecture_object_ids:
+        registry = db.scalar(
+            select(ArchitectureObject).where(
+                ArchitectureObject.id == object_id,
+                ArchitectureObject.tenant_id == workspace.tenant_id,
+                ArchitectureObject.system_id.is_(None),
+            )
+        )
+        if registry is None:
+            skipped.append(
+                IncludeObjectsSkipped(
+                    kind="architecture_object",
+                    id=object_id,
+                    message="Architecture object is not available in this workspace",
+                )
+            )
+            continue
+        selected_objects[object_id] = registry
+
+    selected_integrations: dict[UUID, Integration] = {}
+    for integration_id in payload.integration_ids:
+        integration = db.scalar(
+            select(Integration).where(
+                Integration.id == integration_id,
+                Integration.tenant_id == workspace.tenant_id,
+                Integration.deleted_at.is_(None),
+            )
+        )
+        if integration is None:
+            skipped.append(
+                IncludeObjectsSkipped(
+                    kind="integration",
+                    id=integration_id,
+                    message="Contract is not an active contract in this workspace",
+                )
+            )
+            continue
+        selected_integrations[integration_id] = integration
+
+    for system_id in selected_systems:
+        place(system_id)
+
+    for object_id, registry in selected_objects.items():
+        place(object_id, KIND_DISCIPLINE_FOR_INCLUDE.get(registry.kind))
+        if registry.kind == "solution_boundary" and payload.visualize_solution_membership:
+            boundary_occurrence = occurrences[str(object_id)]
+            members = list(
+                db.scalars(
+                    select(SolutionMember.system_id).where(
+                        SolutionMember.tenant_id == workspace.tenant_id,
+                        SolutionMember.solution_object_id == object_id,
+                    )
+                )
+            )
+            for member_id in members:
+                member_system = db.scalar(
+                    select(CatalogSystem).where(
+                        CatalogSystem.id == member_id,
+                        CatalogSystem.tenant_id == workspace.tenant_id,
+                        CatalogSystem.deleted_at.is_(None),
+                    )
+                )
+                if member_system is None:
+                    skipped.append(
+                        IncludeObjectsSkipped(
+                            kind="solution_member",
+                            id=member_id,
+                            message="A solution member system is no longer active",
+                        )
+                    )
+                    continue
+                member_occurrence = place(member_id)
+                if not has_relationship(boundary_occurrence, member_occurrence, None):
+                    relationships.append(
+                        ArchitectureStateRelationship(
+                            id=f"rel-{uuid4()}",
+                            source_id=boundary_occurrence,
+                            target_id=member_occurrence,
+                            type="Contains",
+                        ).model_dump(mode="json")
+                    )
+                    added_relationships += 1
+
+    for integration_id, integration in selected_integrations.items():
+        source_occurrence = occurrences.get(str(integration.source_system_id))
+        target_occurrence = occurrences.get(str(integration.target_system_id))
+        if source_occurrence is None or target_occurrence is None:
+            skipped.append(
+                IncludeObjectsSkipped(
+                    kind="integration",
+                    id=integration_id,
+                    name=integration.name,
+                    message=(
+                        "Both endpoint systems must be on the canvas before this "
+                        "contract can be shown"
+                    ),
+                )
+            )
+            continue
+        if has_relationship(source_occurrence, target_occurrence, str(integration_id)):
+            continue
+        relationships.append(
+            ArchitectureStateRelationship(
+                id=f"rel-{uuid4()}",
+                source_id=source_occurrence,
+                target_id=target_occurrence,
+                type="Consumes",
+                name=integration.name,
+                integration_id=integration_id,
+            ).model_dump(mode="json")
+        )
+        added_relationships += 1
+
+    state.nodes = nodes
+    state.relationships = relationships
+    state.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(state)
+    return IncludeObjectsResponse(
+        state=ArchitectureStateResponse.model_validate(state),
+        added_occurrences=added_occurrences,
+        added_relationships=added_relationships,
+        skipped=skipped,
+    )

@@ -9,9 +9,14 @@ import {
   type MappingGraphNode,
 } from "./mappingGraphModel";
 import type { TypeValidationResult } from "./mappingTypeValidation";
+import {
+  isResponsePhase as isResponsePhaseKind,
+  isSharedResponseGraphPhase as isSharedResponseGraphPhaseKind,
+  type ArchitecturePhaseKind,
+} from "./architecturePhases";
 
 export type ArchitectureInteractionType = "ONE_WAY" | "REQUEST_RESPONSE" | "ASYNC_CALLBACK";
-export type ArchitecturePhaseKind = "request" | "success-response" | "async-response" | "error-response";
+export type { ArchitecturePhaseKind } from "./architecturePhases";
 export type ArchitectureValidationStatus =
   | "Valid"
   | "Warnings"
@@ -389,13 +394,13 @@ function phaseKinds(interactionType: ArchitectureInteractionType): ArchitectureP
 export function isSharedResponseGraphPhase(
   phase: string,
 ): phase is "success-response" | "async-response" {
-  return phase === "success-response" || phase === "async-response";
+  return isSharedResponseGraphPhaseKind(phase);
 }
 
 export function isArchitectureResponsePhase(
   phase: string,
 ): phase is "success-response" | "async-response" | "error-response" {
-  return isSharedResponseGraphPhase(phase) || phase === "error-response";
+  return isResponsePhaseKind(phase);
 }
 
 type PhaseEndpoint = {

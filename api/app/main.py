@@ -2,16 +2,22 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.architecture.enterprise import router as architecture_enterprise_router
+from app.architecture.information import router as architecture_information_router
 from app.architecture.objects import router as architecture_objects_router
 from app.architecture.routes import router as architecture_router
+from app.architecture.solution import router as architecture_solution_router
+from app.architecture.traceability import router as architecture_traceability_router
 from app.auth.routes import router as auth_router
 from app.catalog.routes import router as catalog_router
 from app.db import check_database
+from app.imports.routes import router as imports_router
+from app.integrations.integration_design import router as integration_design_router
 from app.integrations.routes import router as integrations_router
 from app.scenarios.routes import router as scenarios_router
 from app.workspaces.routes import router as workspaces_router
 
-app = FastAPI(title="Data Designer API", version="0.1.0-alpha")
+app = FastAPI(title="Data Designer API", version="0.2.0-alpha")
 
 
 @app.middleware("http")
@@ -34,6 +40,12 @@ app.include_router(scenarios_router)
 app.include_router(workspaces_router)
 app.include_router(architecture_router)
 app.include_router(architecture_objects_router)
+app.include_router(architecture_information_router)
+app.include_router(architecture_solution_router)
+app.include_router(architecture_enterprise_router)
+app.include_router(architecture_traceability_router)
+app.include_router(integration_design_router)
+app.include_router(imports_router)
 
 
 @app.get("/health", tags=["health"])

@@ -6,8 +6,9 @@ import {
   type MappingGraphField,
   type MappingGraphNode,
 } from "./mappingGraphModel";
+import type { ArchitecturePhaseKind } from "./architecturePhases";
 
-export type LandscapeMappingPhase = "request" | "success-response" | "error-response";
+export type LandscapeMappingPhase = Exclude<ArchitecturePhaseKind, "async-response">;
 
 export type LandscapeGraphDocument = MappingGraphDocument & {
   version: number;

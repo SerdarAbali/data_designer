@@ -5,6 +5,58 @@ authoritative requirements remain in [MASTER-SPEC.md](../MASTER-SPEC.md);
 phase scope and acceptance criteria remain in
 [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md).
 
+## 2026-10-15 — Guided architecture import (Phase 3)
+
+- Added one shared guided import experience, opened from **Catalog → Import from
+  Excel or CSV**, for Systems, Information objects, Integrations, and Solutions.
+  CSV parsing reuses the Papa Parse pipeline from the contract mapping exchange;
+  `.xlsx` parsing uses ExcelJS, loaded on demand so the spreadsheet parser stays
+  out of the initial bundle. Both formats feed one table pipeline, so mapping,
+  preview, and issue reporting behave identically.
+- Backend: new `api/app/imports` package (`schemas`, `service`, `routes`) plus
+  migration `0011_import_provenance`. `POST …/imports/preview` validates and
+  matches without writing; `POST …/imports/commit` applies per-row decisions and
+  records `import_batches` + `import_row_results` (source file, sheet, row
+  number, external ID, before/after snapshots) with created / updated / matched /
+  skipped / blocked / failed counts; `GET …/imports` and `GET …/imports/{id}`
+  expose history and row detail; `POST …/imports/{id}/undo` reverses one batch
+  only and reports conflicts for records that are referenced elsewhere or were
+  edited after the import, allowing a retry once the reference is gone.
+- Matching is layered and deterministic: external ID, then normalized exact
+  name, then an existing system alias, then a similarity suggestion (ratio ≥
+  0.90) that must be confirmed by the user and is never merged automatically.
+- Canonical model additions are additive: `systems.external_identifier` (unique
+  while active), system aliases in the existing bounded `metadata.aliases`,
+  `information_objects.external_identifier`/`classification`,
+  `solution_boundaries.external_identifier`/`owner`, `integrations.
+  external_identifier` plus a bounded `metadata` document, and the new
+  `solution_members` membership table that references canonical systems instead
+  of system copies. Imported systems register as shared architecture objects
+  through the existing event, and imported integrations reuse the contract table
+  with empty graphs — no duplicated schemas, mappings, transformations, or
+  tests.
+- Current architecture: `POST …/states/{state_id}/include-objects` is the only
+  append-only path that enriches the read-only Current state. The wizard's
+  **Use in Current architecture** step lets the user tick exactly which imported
+  systems, information objects, contracts, and solution memberships appear, and
+  nothing is placed automatically.
+- Tests: 13 new API tests in `api/tests/test_imports.py` (matching cascade,
+  create/update/skip, re-import idempotency, information-object and integration
+  reference blocking, solution membership, discipline gating, batch-scoped undo
+  with conflicts and retry, include-objects, CSRF/tenant isolation) and 15 new
+  frontend tests (`architectureImport.test.ts`,
+  `ArchitectureImportDialog.test.tsx`). `fixtures/architecture-import/` holds
+  CSV/`.xlsx` samples and `verify_import_flow.py`, which drives the twelve-step
+  end-to-end verification against a live API.
+- The end-to-end verification was run against the running stack after a database
+  backup and `alembic upgrade head`; it confirmed match/create/update/skip
+  counts, information-object alias resolution, integration endpoint resolution
+  and blocking, solution membership over canonical systems, idempotent
+  re-import, selection-only Current enrichment, persistence after refresh, and
+  batch-scoped undo (including the guarded conflict path).
+- Version `0.2.0-alpha`; no connectors, external execution, or scheduling were
+  added.
+
 ## 2026-10-07 — README refresh and user guide
 
 - Rewrote the [README](../README.md) for developers and operators: quick

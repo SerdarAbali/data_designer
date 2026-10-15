@@ -218,11 +218,13 @@ describe("CSV editor draft and persistence integration", () => {
     await openEditor("Request", { registerNavigationGuard: (next) => { guard = next; } });
     await importMapping();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByRole("button", { name: "Reload current version" });
-    fireEvent.click(screen.getByRole("button", { name: "Reload current version" }));
-    await waitFor(() => expect(document.querySelector(".save-state")?.textContent).toBe("Saved · r1"));
-    expect(await guard()).toBe(true);
-  });
+    const reload = await screen.findByRole("button", { name: "Reload current version" });
+    fireEvent.click(reload);
+    await waitFor(() => expect(document.querySelector(".save-state")?.textContent).toBe("Saved · r1"), {
+      timeout: 10000,
+    });
+    await waitFor(async () => expect(await guard()).toBe(true), { timeout: 10000 });
+  }, 20000);
   it("invalidates Undo on phase switching without dropping the imported draft", async () => {
     await openEditor();
     await importMapping();

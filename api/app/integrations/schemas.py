@@ -17,6 +17,23 @@ from app.integrations.graph import GraphDocument
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
 ArchitectureStatus = Literal["draft", "attention", "healthy"]
 InteractionType = Literal["ONE_WAY", "REQUEST_RESPONSE", "ASYNC_CALLBACK"]
+IntegrationPattern = Literal[
+    "point_to_point",
+    "request_reply",
+    "publish_subscribe",
+    "event_streaming",
+    "message_queue",
+    "file_transfer",
+    "batch",
+    "api_gateway",
+    "orchestration",
+    "other",
+]
+ImplementationStatus = Literal["draft", "in_progress", "built", "verified"]
+AuthType = Literal["none", "api_key", "basic", "oauth2", "jwt", "mtls", "saml", "custom"]
+BackoffStrategy = Literal["none", "linear", "exponential"]
+OrchestrationRole = Literal["orchestration", "choreography", "participant", "none"]
+ShortNote = Annotated[str, Field(max_length=2000)]
 
 
 class SampleRow(BaseModel):
@@ -29,6 +46,46 @@ class SampleRow(BaseModel):
 def validate_json_size(value, label: str, limit: int) -> None:
     if len(json.dumps(value, separators=(",", ":")).encode("utf-8")) > limit:
         raise ValueError(f"{label} must not exceed {limit // 1024} KiB")
+
+
+class RetrySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_attempts: Annotated[int, Field(ge=0, le=10)] = 0
+    backoff: BackoffStrategy = "none"
+
+
+class SecuritySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auth_type: AuthType = "none"
+    notes: ShortNote = ""
+
+
+class IntegrationSpecification(BaseModel):
+    """Bounded, additive integration resilience/security/routing properties.
+
+    The specification never carries child objects; it stores only scalar or list metadata
+    about how the contract behaves. It is not a graph, mapping, schema, or test engine.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    retry: RetrySpec = Field(default_factory=RetrySpec)
+    timeout_ms: Annotated[int | None, Field(default=None, ge=0, le=600_000)] = None
+    idempotent: bool = False
+    idempotency_key_field_id: UUID | None = None
+    security: SecuritySpec = Field(default_factory=SecuritySpec)
+    routing: ShortNote = ""
+    orchestration_role: OrchestrationRole = "none"
+    error_handling: ShortNote = ""
+
+    @model_validator(mode="after")
+    def bounded(self) -> "IntegrationSpecification":
+        if not self.idempotent and self.idempotency_key_field_id is not None:
+            raise ValueError("An idempotency key requires idempotent to be true")
+        validate_json_size(self.model_dump(mode="json"), "Integration specification", 8192)
+        return self
 
 
 class IntegrationCreate(BaseModel):
@@ -52,6 +109,11 @@ class IntegrationCreate(BaseModel):
     )
     error_response_object_id: UUID | None = None
     interaction_type: InteractionType = "ONE_WAY"
+    pattern: IntegrationPattern | None = None
+    implementation_status: ImplementationStatus = "draft"
+    producer_interface_id: UUID | None = None
+    consumer_interface_id: UUID | None = None
+    specification: IntegrationSpecification = Field(default_factory=IntegrationSpecification)
     sample_rows: list[SampleRow] = Field(default_factory=list, max_length=100)
 
     @field_validator("trigger_config")
@@ -79,6 +141,11 @@ class IntegrationUpdate(BaseModel):
     name: Name | None = None
     description: Annotated[str | None, Field(max_length=2000)] = None
     trigger_config: dict[str, JsonValue] | None = None
+    pattern: IntegrationPattern | None = None
+    implementation_status: ImplementationStatus | None = None
+    producer_interface_id: UUID | None = None
+    consumer_interface_id: UUID | None = None
+    specification: IntegrationSpecification | None = None
     sample_rows: list[SampleRow] | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
@@ -90,6 +157,10 @@ class IntegrationUpdate(BaseModel):
             raise ValueError("Name cannot be null")
         if "trigger_config" in self.model_fields_set and self.trigger_config is None:
             raise ValueError("Trigger configuration cannot be null")
+        if "implementation_status" in self.model_fields_set and self.implementation_status is None:
+            raise ValueError("Implementation status cannot be null")
+        if "specification" in self.model_fields_set and self.specification is None:
+            raise ValueError("Specification cannot be null")
         if "sample_rows" in self.model_fields_set and self.sample_rows is None:
             raise ValueError("Sample rows cannot be null")
         if self.trigger_config is not None:
@@ -113,6 +184,11 @@ class GraphUpdate(BaseModel):
     error_response_object_id: UUID | None = None
     interaction_type: InteractionType | None = None
     name: Name | None = None
+    pattern: IntegrationPattern | None = None
+    implementation_status: ImplementationStatus | None = None
+    producer_interface_id: UUID | None = None
+    consumer_interface_id: UUID | None = None
+    specification: IntegrationSpecification | None = None
     sample_rows: list[SampleRow] | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
@@ -258,6 +334,11 @@ class IntegrationResponse(BaseModel):
     )
     error_response_object_id: UUID | None = None
     interaction_type: InteractionType
+    pattern: IntegrationPattern | None = None
+    implementation_status: ImplementationStatus = "draft"
+    producer_interface_id: UUID | None = None
+    consumer_interface_id: UUID | None = None
+    specification: IntegrationSpecification = Field(default_factory=IntegrationSpecification)
     sample_rows: list[SampleRow]
     revision: int
     created_at: str
@@ -321,3 +402,137 @@ class ArchitectureFieldConflictResponse(ArchitectureConflictField):
 class ArchitectureAnalysisResponse(BaseModel):
     integrations: list[ArchitectureIntegrationResponse]
     conflicts: list[ArchitectureFieldConflictResponse]
+
+
+# --- Integration Designer (Slice 4) ---------------------------------------------
+# Read-only projections over the existing contract/mapping/scenario/test engine.
+# These schemas never introduce a second contract, schema, mapping, or test model.
+
+InterfaceDirection = Literal["provided", "required"]
+OperationKind = Literal["operation", "event", "command", "query"]
+ContractStatus = Literal["draft", "in_progress", "built", "verified", "attention"]
+ScenarioConformanceStatus = Literal["passing", "failing", "not_run", "outdated"]
+FlowPhaseName = Literal["request", "success-response", "async-response", "error-response"]
+
+
+class IntegrationOperationSummary(BaseModel):
+    object_id: UUID
+    name: str
+    operation_kind: str
+    description: str | None = None
+
+
+class IntegrationInterfaceRef(BaseModel):
+    object_id: UUID
+    name: str
+    direction: str | None = None
+    interface_kind: str | None = None
+    protocol: str | None = None
+    technology: str | None = None
+
+
+class IntegrationInterfaceSummary(IntegrationInterfaceRef):
+    description: str | None = None
+    component_object_id: UUID | None = None
+    component_name: str | None = None
+    operations: list[IntegrationOperationSummary] = Field(default_factory=list)
+    contract_ids: list[UUID] = Field(default_factory=list)
+
+
+class IntegrationEndpointRef(BaseModel):
+    system_id: UUID
+    system_name: str
+    object_id: UUID
+    object_name: str
+
+
+class IntegrationContractSummary(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    interaction_type: InteractionType
+    pattern: str | None = None
+    implementation_status: str = "draft"
+    revision: int
+    updated_at: str | None = None
+    status: ContractStatus = "draft"
+    source: IntegrationEndpointRef
+    target: IntegrationEndpointRef
+    producer_interface: IntegrationInterfaceRef | None = None
+    consumer_interface: IntegrationInterfaceRef | None = None
+    has_request_graph: bool = False
+    has_response_graph: bool = False
+    has_error_graph: bool = False
+    specification: dict[str, JsonValue] = Field(default_factory=dict)
+    target_fields_mapped: int = 0
+    target_fields_total: int = 0
+    scenario_count: int = 0
+
+
+class IntegrationLandscapeResponse(BaseModel):
+    state_id: UUID
+    state_type: str
+    editable: bool
+    contracts: list[IntegrationContractSummary] = Field(default_factory=list)
+    interfaces: list[IntegrationInterfaceSummary] = Field(default_factory=list)
+
+
+class IntegrationFlowTransformation(BaseModel):
+    node_id: UUID
+    type: str
+    label: str
+
+
+class IntegrationFlowPhase(BaseModel):
+    phase: FlowPhaseName
+    configured: bool = False
+    node_count: int = 0
+    transformation_count: int = 0
+    transformations: list[IntegrationFlowTransformation] = Field(default_factory=list)
+    source_field_count: int = 0
+    target_field_count: int = 0
+    mapped_target_count: int = 0
+    target_fields: list[str] = Field(default_factory=list)
+
+
+class IntegrationMessageFlowResponse(BaseModel):
+    contract: IntegrationContractSummary
+    routing: str = ""
+    trigger_config: dict[str, JsonValue] = Field(default_factory=dict)
+    phases: list[IntegrationFlowPhase] = Field(default_factory=list)
+
+
+class IntegrationContractDetail(BaseModel):
+    contract: IntegrationContractSummary
+    source_interface: IntegrationInterfaceSummary | None = None
+    target_interface: IntegrationInterfaceSummary | None = None
+    phases: list[IntegrationFlowPhase] = Field(default_factory=list)
+
+
+class IntegrationCoverage(BaseModel):
+    mapped: int = 0
+    total: int = 0
+    ratio: float = 0.0
+
+
+class IntegrationScenarioStatus(BaseModel):
+    id: UUID
+    name: str
+    category: str
+    revision: int
+    updated_at: str | None = None
+    status: ScenarioConformanceStatus = "not_run"
+    step_count: int = 0
+    message: str = ""
+
+
+class IntegrationConformanceResponse(BaseModel):
+    contract_id: UUID
+    contract_name: str
+    revision: int
+    updated_at: str | None = None
+    request_coverage: IntegrationCoverage = Field(default_factory=IntegrationCoverage)
+    response_coverage: IntegrationCoverage = Field(default_factory=IntegrationCoverage)
+    error_coverage: IntegrationCoverage = Field(default_factory=IntegrationCoverage)
+    scenarios: list[IntegrationScenarioStatus] = Field(default_factory=list)
+    summary: dict[str, int] = Field(default_factory=dict)

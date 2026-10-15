@@ -1,6 +1,6 @@
 [project]
 name = "data-designer-api"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 description = "Data Designer backend API and transformation engine"
 requires-python = ">=3.13"
 

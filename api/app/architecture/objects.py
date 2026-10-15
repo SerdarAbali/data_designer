@@ -87,6 +87,8 @@ def _object_response(
         description=row.description,
         owner=getattr(row, "owner", None),
         authoritative_system_id=getattr(row, "authoritative_system_id", None),
+        external_identifier=getattr(row, "external_identifier", None),
+        classification=getattr(row, "classification", None),
     )
 
 

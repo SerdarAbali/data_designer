@@ -1,6 +1,8 @@
 import React from "react";
 import type { ArchitectureObject } from "../../architectureTypes";
 import { ARCHITECTURE_OBJECT_ICONS, type CanonicalSystem } from "../../architectureCanvasModel";
+import type { TraceObjectRef } from "../../workbench/workbenchTypes";
+import ObjectTracePanel from "./ObjectTracePanel";
 import type { SaveStatus } from "./ArchitectureTopBar";
 
 type UpdatePayload = {
@@ -24,6 +26,9 @@ type Props = {
   relationships: { id: string; label: string }[];
   onSelectRelationship: (id: string) => void;
   onRemove?: () => void;
+  workspaceId?: string;
+  stateId?: string | null;
+  onNavigateTrace?: (node: TraceObjectRef) => void;
 };
 
 const LABELS: Record<ArchitectureObject["kind"], string> = {
@@ -50,6 +55,9 @@ export default function ArchitectureObjectInspector({
   relationships,
   onSelectRelationship,
   onRemove,
+  workspaceId,
+  stateId,
+  onNavigateTrace,
 }: Props) {
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -180,6 +188,14 @@ export default function ArchitectureObjectInspector({
           <button key={relationship.id} type="button" className="secondary-button" onClick={() => onSelectRelationship(relationship.id)}>{relationship.label}</button>
         ))}
       </section>
+      {workspaceId && (object || system) && (
+        <ObjectTracePanel
+          workspaceId={workspaceId}
+          stateId={stateId ?? null}
+          objectId={object?.id ?? system?.id ?? null}
+          onNavigate={onNavigateTrace}
+        />
+      )}
       {onRemove && <button type="button" className="secondary-button architecture-danger" onClick={onRemove}>Remove from this state</button>}
     </aside>
   );

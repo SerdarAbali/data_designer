@@ -27,6 +27,8 @@ import {
 import MapperEdge from "./components/mapper/MapperEdge";
 import ScenarioWorkspace from "./components/scenarios/ScenarioWorkspace";
 import { designStatusLabel, designValidationReason } from "./designLabels";
+import { ApiError, api, list } from "./apiClient";
+import type { ArchitecturePhaseKind } from "./architecturePhases";
 import {
   normalizeSchemaType,
   validateTypeChain,
@@ -56,8 +58,8 @@ type CatalogField = {
   position: number;
 };
 type InteractionType = "ONE_WAY" | "REQUEST_RESPONSE" | "ASYNC_CALLBACK";
-type ContractView = "overview" | "request" | "success-response" | "error-response" | "async-response";
-type MappingPhase = "request" | "success-response" | "error-response" | "async-response";
+type ContractView = "overview" | MappingPhase;
+type MappingPhase = ArchitecturePhaseKind;
 type Integration = {
   id: string;
   source_system_id: string;
@@ -572,66 +574,12 @@ export function dirtyStateForWorkbenchViewSwitch(currentDirty: boolean): boolean
   return currentDirty;
 }
 
-class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-  }
-}
-
-function csrfToken(): string {
-  const raw = document.cookie.split("; ").find((item) => item.startsWith("dd_csrf="))?.slice(8);
-  if (!raw) throw new Error("Your session could not be verified. Reload and try again.");
-  return decodeURIComponent(raw);
-}
-
 function newUuid(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function readableError(detail: unknown): string {
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) {
-    return detail.map((item) => {
-      if (item && typeof item === "object" && "msg" in item) return String(item.msg);
-      return JSON.stringify(item);
-    }).join("; ");
-  }
-  if (detail && typeof detail === "object") {
-    const data = detail as { code?: string; message?: string; issues?: { path: string; message: string }[] };
-    if (data.issues?.length) {
-      return data.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ");
-    }
-    return data.message ?? data.code ?? JSON.stringify(detail);
-  }
-  return "The request could not be completed.";
-}
-
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
-  if (init.method && init.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
-  const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
-    throw new ApiError(readableError(body.detail), response.status);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
-
-async function list<T>(path: string): Promise<T[]> {
-  const result: T[] = [];
-  let offset = 0;
-  while (true) {
-    const page = await api<T[]>(`${path}?limit=500&offset=${offset}`);
-    result.push(...page);
-    if (page.length < 500) return result;
-    offset += page.length;
-  }
 }
 
 function toFlowNode(

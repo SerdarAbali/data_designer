@@ -65,6 +65,7 @@ class SystemCreate(CatalogInput):
     kind: ShortText = "application"
     icon: str | None = Field(default=None, max_length=100)
     color: str | None = Field(default=None, max_length=40)
+    external_identifier: str | None = Field(default=None, max_length=255)
     position: dict[str, float] | None = None
     binding_state: ShortText = "unbound"
 
@@ -84,6 +85,7 @@ class SystemUpdate(CatalogInput):
     kind: ShortText | None = None
     icon: str | None = Field(default=None, max_length=100)
     color: str | None = Field(default=None, max_length=40)
+    external_identifier: str | None = Field(default=None, max_length=255)
     position: dict[str, float] | None = None
     binding_state: ShortText | None = None
 
@@ -112,6 +114,7 @@ class SystemResponse(CatalogResponse):
     kind: str
     icon: str | None
     color: str | None
+    external_identifier: str | None
     position: dict[str, float] | None
     binding_state: str
     created_at: str

@@ -7,8 +7,10 @@ import type { ScenarioPhase } from "./scenarioModel";
 import WorkspaceSwitcher from "./components/workspaces/WorkspaceSwitcher";
 import type { WorkspaceInfo } from "./architectureTypes";
 import ArchiveImpactDialog, { type ReferencingIntegration } from "./components/catalog/ArchiveImpactDialog";
+import ArchitectureImportDialog from "./components/import/ArchitectureImportDialog";
 import type { NavigationGuard } from "./contextSaveQueue";
 import useStudioTheme from "./useStudioTheme";
+import { ApiError, api, csrfToken, list } from "./apiClient";
 
 type System = {
   id: string;
@@ -73,83 +75,6 @@ function ReorderButtons({
   );
 }
 
-class ApiRequestError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly detail?: unknown,
-  ) {
-    super(message);
-  }
-}
-
-function csrfToken(): string {
-  const token = document.cookie
-    .split("; ")
-    .find((cookie) => cookie.startsWith("dd_csrf="))
-    ?.slice("dd_csrf=".length);
-  if (!token) {
-    throw new Error("Your session could not be verified. Reload and try again.");
-  }
-  return decodeURIComponent(token);
-}
-
-function detailMessage(detail: unknown): string {
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) {
-    return detail
-      .map((issue) => {
-        if (issue && typeof issue === "object" && "msg" in issue) {
-          return String(issue.msg);
-        }
-        return JSON.stringify(issue);
-      })
-      .join("; ");
-  }
-  if (detail && typeof detail === "object") {
-    const record = detail as {
-      message?: unknown;
-      code?: unknown;
-      integrations?: { name?: string }[];
-    };
-    const message =
-      typeof record.message === "string"
-        ? record.message
-        : typeof record.code === "string"
-          ? record.code
-          : JSON.stringify(detail);
-    if (record.integrations?.length) {
-      return `${message}: ${record.integrations.map((item) => item.name ?? "contract").join(", ")}`;
-    }
-    return message;
-  }
-  return "The request could not be completed.";
-}
-
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
-  if (init.method && init.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
-  const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
-    throw new ApiRequestError(detailMessage(body.detail), response.status, body.detail);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
-
-async function apiList<T>(path: string): Promise<T[]> {
-  const records: T[] = [];
-  let offset = 0;
-  while (true) {
-    const page = await api<T[]>(`${path}?limit=500&offset=${offset}`);
-    records.push(...page);
-    if (page.length < 500) return records;
-    offset += page.length;
-  }
-}
-
 function objectMetadata(value: FormDataEntryValue | null): Record<string, unknown> {
   const text = String(value ?? "{}").trim() || "{}";
   const parsed: unknown = JSON.parse(text);
@@ -207,7 +132,9 @@ export default function CatalogWorkspace({
   const [activeView, setActiveView] = React.useState<"canvas" | "catalog" | "integrations">("canvas");
   const [activeWorkspace, setActiveWorkspace] = React.useState<WorkspaceInfo | null>(null);
   const [integrationToOpen, setIntegrationToOpen] = React.useState("");
-  const [integrationPhaseToOpen, setIntegrationPhaseToOpen] = React.useState<ScenarioPhase | undefined>();
+  const [integrationPhaseToOpen, setIntegrationPhaseToOpen] = React.useState<
+    ScenarioPhase | "scenarios" | undefined
+  >();
   const [quickAddSystemId, setQuickAddSystemId] = React.useState("");
   const [catalogSearch, setCatalogSearch] = React.useState("");
   const [expandedSystemId, setExpandedSystemId] = React.useState("");
@@ -226,6 +153,8 @@ export default function CatalogWorkspace({
   const [loadingFields, setLoadingFields] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [importOpen, setImportOpen] = React.useState(false);
+  const [importNotice, setImportNotice] = React.useState("");
   const [archiveImpactState, setArchiveImpactState] = React.useState<{
     path: string;
     itemName: string;
@@ -251,7 +180,7 @@ export default function CatalogWorkspace({
     const requestId = ++systemsRequest.current;
     setLoadingSystems(true);
     try {
-      const nextSystems = await apiList<System>("/api/catalog/systems");
+      const nextSystems = await list<System>("/api/catalog/systems");
       if (requestId !== systemsRequest.current) return;
       setSystems(nextSystems);
       setExpandedSystemId((current) =>
@@ -277,9 +206,9 @@ export default function CatalogWorkspace({
   const refreshWorkspace = React.useCallback(async () => {
     const requestId = ++workspaceRequest.current;
     try {
-      const list = await apiList<WorkspaceInfo>("/api/workspaces");
+      const workspaces = await list<WorkspaceInfo>("/api/workspaces");
       if (requestId !== workspaceRequest.current) return;
-      const active = list.find((w) => w.is_active) ?? list[0] ?? null;
+      const active = workspaces.find((w) => w.is_active) ?? workspaces[0] ?? null;
       setActiveWorkspace(active);
     } catch (err) {
       if (requestId === workspaceRequest.current) {
@@ -303,14 +232,14 @@ export default function CatalogWorkspace({
     }
     setLoadingObjects(true);
     try {
-      const nextObjects = await apiList<CatalogObject>(
+      const nextObjects = await list<CatalogObject>(
         `/api/catalog/systems/${currentSystemId}/objects`,
       );
       if (requestId !== objectsRequest.current) return;
       setObjects(nextObjects);
       const counts = await Promise.all(nextObjects.map(async (object) => [
         object.id,
-        (await apiList<CatalogField>(`/api/catalog/objects/${object.id}/fields`)).length,
+        (await list<CatalogField>(`/api/catalog/objects/${object.id}/fields`)).length,
       ] as const));
       if (requestId !== objectsRequest.current) return;
       setObjectFieldCounts(Object.fromEntries(counts));
@@ -338,7 +267,7 @@ export default function CatalogWorkspace({
     }
     setLoadingFields(true);
     try {
-      const nextFields = await apiList<CatalogField>(
+      const nextFields = await list<CatalogField>(
         `/api/catalog/objects/${currentObjectId}/fields`,
       );
       if (requestId !== fieldsRequest.current) return;
@@ -598,7 +527,7 @@ export default function CatalogWorkspace({
       await refresh();
     } catch (caught) {
       if (
-        caught instanceof ApiRequestError &&
+        caught instanceof ApiError &&
         caught.status === 409 &&
         caught.detail &&
         typeof caught.detail === "object" &&
@@ -774,6 +703,24 @@ export default function CatalogWorkspace({
               <h2 id="systems-heading">Systems</h2>
             </div>
             <span className="item-count">{systems.length}</span>
+          </div>
+          <div className="import-entry">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!activeWorkspace}
+              onClick={() => {
+                setImportNotice("");
+                setImportOpen(true);
+              }}
+            >
+              Import from Excel or CSV
+            </button>
+            {importNotice && (
+              <p role="status" className="muted">
+                {importNotice}
+              </p>
+            )}
           </div>
           <label className="catalog-search">
             <span className="sr-only">Filter catalog tree</span>
@@ -1331,6 +1278,20 @@ export default function CatalogWorkspace({
             } finally {
               setArchiveCascading(false);
             }
+          }}
+        />
+      )}
+      {importOpen && activeWorkspace && (
+        <ArchitectureImportDialog
+          workspaceId={activeWorkspace.id}
+          onClose={() => setImportOpen(false)}
+          onCommitted={(message) => {
+            setImportNotice(message);
+            void refreshSystems();
+          }}
+          onOpenCanvas={() => {
+            setImportOpen(false);
+            void navigate("canvas");
           }}
         />
       )}

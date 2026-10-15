@@ -76,7 +76,11 @@ def _ensure_workspace_entity(
             tenant_id=tenant.id,
             name=tenant.name,
             description=tenant.description,
-            disciplines=disciplines if disciplines is not None else ["enterprise", "information", "solution", "integration"],
+            disciplines=(
+                disciplines
+                if disciplines is not None
+                else ["enterprise", "information", "solution", "integration"]
+            ),
         )
         db.add(ws)
         db.flush()
@@ -268,7 +272,11 @@ def switch_workspace(
     )
 
 
-@router.post("/{workspace_id}/fork", response_model=WorkspaceResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{workspace_id}/fork",
+    response_model=WorkspaceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def fork_workspace_endpoint(
     workspace_id: UUID,
     payload: WorkspaceFork,
@@ -295,7 +303,11 @@ def fork_workspace_endpoint(
 
     new_tenant = Tenant(
         name=fork_name,
-        description=payload.description.strip() if payload.description else f"Fork of {source_tenant.name}",
+        description=(
+            payload.description.strip()
+            if payload.description
+            else f"Fork of {source_tenant.name}"
+        ),
         owner_id=user.id,
     )
     db.add(new_tenant)
@@ -304,7 +316,9 @@ def fork_workspace_endpoint(
     fork_workspace(db, source_tenant.id, new_tenant)
 
     source_ws = _ensure_workspace_entity(db, source_tenant)
-    fork_disciplines = payload.disciplines if payload.disciplines is not None else source_ws.disciplines
+    fork_disciplines = (
+        payload.disciplines if payload.disciplines is not None else source_ws.disciplines
+    )
     fork_ws = _ensure_workspace_entity(db, new_tenant, disciplines=fork_disciplines)
 
     # Switch session to new fork
@@ -370,7 +384,12 @@ def import_workspace_endpoint(
 
     import_workspace_bundle(db, new_tenant, payload)
 
-    import_disciplines = ws_info.get("disciplines") or ["enterprise", "information", "solution", "integration"]
+    import_disciplines = ws_info.get("disciplines") or [
+        "enterprise",
+        "information",
+        "solution",
+        "integration",
+    ]
     imported_ws = _ensure_workspace_entity(db, new_tenant, disciplines=import_disciplines)
 
     auth_session.active_tenant_id = new_tenant.id

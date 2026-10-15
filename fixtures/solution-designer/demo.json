@@ -1,0 +1,89 @@
+{
+  "solution": {
+    "name": "Payments Platform",
+    "description": "Card and bank payment processing for the retail platform.",
+    "owner": "Payments Team"
+  },
+  "members": ["Core Banking", "Payments Gateway"],
+  "components": [
+    {
+      "name": "Payment API",
+      "component_type": "service",
+      "technology": "FastAPI",
+      "responsibility": "Expose payment endpoints and validate incoming requests.",
+      "interfaces": [
+        {
+          "name": "Payments API",
+          "direction": "provided",
+          "interface_kind": "sync",
+          "protocol": "HTTPS",
+          "operations": [
+            {"name": "CreatePayment", "operation_kind": "operation"},
+            {"name": "GetPaymentStatus", "operation_kind": "operation"},
+            {"name": "PaymentCreated", "operation_kind": "event"}
+          ]
+        },
+        {
+          "name": "Ledger Client",
+          "direction": "required",
+          "interface_kind": "sync",
+          "protocol": "gRPC",
+          "operations": [
+            {"name": "PostLedgerEntry", "operation_kind": "command"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Payment Worker",
+      "component_type": "service",
+      "technology": "Go",
+      "responsibility": "Consume payment events and settle them asynchronously.",
+      "interfaces": [
+        {
+          "name": "Payment Events Consumer",
+          "direction": "required",
+          "interface_kind": "async",
+          "protocol": "Kafka",
+          "operations": [
+            {"name": "ConsumePaymentCreated", "operation_kind": "event"}
+          ]
+        },
+        {
+          "name": "Settlement Callback",
+          "direction": "provided",
+          "interface_kind": "async",
+          "protocol": "Kafka",
+          "operations": [
+            {"name": "SettlementCompleted", "operation_kind": "event"}
+          ]
+        }
+      ]
+    }
+  ],
+  "repositories": [
+    {
+      "name": "Payments DB",
+      "repository_type": "relational",
+      "technology": "PostgreSQL",
+      "owner": "Payments Team",
+      "links": ["Payment API", "Payment Worker"]
+    }
+  ],
+  "deployment_nodes": [
+    {
+      "name": "Production Cluster",
+      "environment": "production",
+      "hosting": "cloud",
+      "technology": "Kubernetes",
+      "links": ["Payment API", "Payment Worker"]
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "name": "Public DMZ",
+      "security_level": "public",
+      "links": {"interfaces": ["Payments API", "Payment Events Consumer"]}
+    }
+  ]
+}

@@ -123,6 +123,43 @@ connector service, or distributed execution runtime in the current system.
 - Scenarios never copy or modify contract definitions. They are design-time
   only, with no connectors or runtime execution.
 
+### Guided architecture import (2026-10-15 addition)
+
+- **Catalog → Import from Excel or CSV** opens one shared wizard for Systems,
+  Information objects, Integrations, and Solutions.
+- Upload a `.csv` (Papa Parse) or `.xlsx` (ExcelJS, loaded on demand) file,
+  choose the worksheet and import type, and map columns to application fields;
+  the mapping is pre-suggested from headers and synonyms, and a template can be
+  downloaded.
+- `POST /api/workspaces/{id}/imports/preview` validates and matches every row
+  without writing. Matching is layered and deterministic: external ID, then
+  normalized exact name, then an existing system alias, then a similarity
+  suggestion (ratio ≥ 0.90) that must be confirmed and is never merged
+  automatically.
+- Per row the user chooses **Use existing**, **Create new**, **Update existing**,
+  or **Skip**. `POST …/imports/commit` re-validates, applies the decisions, and
+  records an `import_batches` row plus `import_row_results` (source file, sheet,
+  row number, external ID, before/after snapshots) for created / updated /
+  matched / skipped / blocked / failed counts.
+- Row-level errors download as CSV. `POST …/imports/{batch_id}/undo` reverses one
+  batch only and reports conflicts instead of deleting records that other
+  batches reference or overwriting records edited after the import; a blocked
+  undo can be retried once the reference is gone. `GET …/imports` lists the last
+  50 batches so undo survives a refresh.
+- Imported systems are canonical catalog systems (registered as shared
+  architecture objects); information objects carry owner, authoritative system,
+  and classification; integrations reuse the existing contract table with empty
+  graphs and never duplicate schemas, mappings, transformations, or tests;
+  solutions store membership in `solution_members`, referencing canonical
+  systems instead of copies.
+- `POST /api/workspaces/{id}/states/{state_id}/include-objects` is the only path
+  that enriches the read-only Current state. It is append-only and idempotent:
+  the user selects which imported systems, objects, contracts, and solution
+  memberships appear, and nothing is placed automatically.
+- No connectors, external reads, or execution are involved; the feature is
+  workspace-scoped, CSRF-protected, and bounded (1 MiB CSV / 2 MiB `.xlsx`, 500
+  rows, 64 columns, 2000 characters per cell; formula-like text is rejected).
+
 ### Contract mapping CSV exchange (2026-10-07 addition)
 
 - Active-tab import/export for existing contracts, including unsaved draft

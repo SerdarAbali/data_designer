@@ -30,6 +30,7 @@ import SystemLandscapeNodeCard, {
   type SystemLandscapeNodeData,
 } from "./components/landscape/SystemLandscapeNode";
 import { designStatusLabel, designValidationReason } from "./designLabels";
+import { api, list } from "./apiClient";
 
 type System = {
   id: string;
@@ -154,43 +155,6 @@ type ResolvedLandscapePath = LandscapeMappingPath & {
   receiverSystemId: string;
   receiverObjectId: string;
 };
-
-class ApiError extends Error {}
-
-function csrfToken(): string {
-  const raw = document.cookie.split("; ").find((item) => item.startsWith("dd_csrf="))?.slice(8);
-  if (!raw) throw new Error("Your session could not be verified. Reload and try again.");
-  return decodeURIComponent(raw);
-}
-
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
-  if (init.method && init.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
-  const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      detail?: string | { message?: string };
-    };
-    const detail = body.detail;
-    throw new ApiError(
-      typeof detail === "string" ? detail : detail?.message ?? `Request failed (${response.status}).`,
-    );
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
-
-async function list<T>(path: string): Promise<T[]> {
-  const records: T[] = [];
-  let offset = 0;
-  while (true) {
-    const page = await api<T[]>(`${path}?limit=500&offset=${offset}`);
-    records.push(...page);
-    if (page.length < 500) return records;
-    offset += page.length;
-  }
-}
 
 function integrationPhasePaths(
   integration: Integration,

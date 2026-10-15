@@ -10,6 +10,7 @@ import type {
   ScenarioEvaluation,
   ScenarioRecord,
 } from "./scenarioModel";
+import { ApiError, api as request, list } from "./apiClient";
 
 export class ScenarioApiError extends Error {
   status: number;
@@ -22,12 +23,6 @@ export class ScenarioApiError extends Error {
   }
 }
 
-function csrfToken(): string {
-  const raw = document.cookie.split("; ").find((item) => item.startsWith("dd_csrf="))?.slice(8);
-  if (!raw) throw new Error("Your session could not be verified. Reload and try again.");
-  return decodeURIComponent(raw);
-}
-
 function validationMessage(detail: unknown): string | null {
   if (!Array.isArray(detail) || detail.length === 0) return null;
   const first = detail[0] as { msg?: string; loc?: unknown[] };
@@ -36,33 +31,21 @@ function validationMessage(detail: unknown): string | null {
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
-  if (init.method && init.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
-  const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
-    const detail = body.detail;
-    if (typeof detail === "string") throw new ScenarioApiError(detail, response.status);
-    const structured = detail as { message?: string; issues?: ScenarioApiError["issues"] } | undefined;
-    throw new ScenarioApiError(
-      validationMessage(detail) ?? structured?.message ?? `Request failed (${response.status}).`,
-      response.status,
-      Array.isArray(structured?.issues) ? structured.issues : [],
-    );
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
-
-async function list<T>(path: string): Promise<T[]> {
-  const records: T[] = [];
-  let offset = 0;
-  while (true) {
-    const page = await api<T[]>(`${path}?limit=500&offset=${offset}`);
-    records.push(...page);
-    if (page.length < 500) return records;
-    offset += page.length;
+  try {
+    return await request<T>(path, init);
+  } catch (caught) {
+    if (caught instanceof ApiError) {
+      const detail = caught.detail;
+      const structured = detail as
+        | { message?: string; issues?: ScenarioApiError["issues"] }
+        | undefined;
+      throw new ScenarioApiError(
+        validationMessage(detail) ?? structured?.message ?? caught.message,
+        caught.status,
+        Array.isArray(structured?.issues) ? structured.issues : [],
+      );
+    }
+    throw caught;
   }
 }
 

@@ -37,6 +37,14 @@ class CatalogSystem(Base):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        Index(
+            "uq_systems_active_external_id",
+            "tenant_id",
+            "external_identifier",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -48,6 +56,8 @@ class CatalogSystem(Base):
     kind: Mapped[str] = mapped_column(String(100), nullable=False)
     icon: Mapped[str | None] = mapped_column(String(100))
     color: Mapped[str | None] = mapped_column(String(40))
+    external_identifier: Mapped[str | None] = mapped_column(String(255))
+
     position: Mapped[dict | None] = mapped_column(json_type)
     binding_state: Mapped[str] = mapped_column(String(100), nullable=False, default="unbound")
     extra_metadata: Mapped[dict] = mapped_column(
@@ -110,6 +120,7 @@ class CatalogField(Base):
             name="fk_fields_object_tenant",
         ),
         UniqueConstraint("id", "object_id", "tenant_id", name="uq_fields_id_object_tenant"),
+        UniqueConstraint("id", "tenant_id", name="uq_fields_id_tenant"),
         Index(
             "uq_fields_active_name",
             "object_id",

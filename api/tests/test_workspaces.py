@@ -10,8 +10,6 @@ from app import main
 from app.auth.security import hash_password
 from app.db import Base, get_session
 from app.models import (
-    CatalogField,
-    CatalogObject,
     CatalogSystem,
     Integration,
     Tenant,
@@ -108,11 +106,11 @@ def test_switch_workspace_isolates_catalog(client) -> None:
     assert res.status_code == 201
 
     # Create and switch to WS 2
-    ws2 = test_client.post(
+    test_client.post(
         "/api/workspaces",
         json={"name": "Workspace 2"},
         headers=headers,
-    ).json()
+    )
 
     # Catalog in WS 2 should be empty
     systems_ws2 = test_client.get("/api/catalog/systems").json()

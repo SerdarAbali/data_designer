@@ -3,7 +3,6 @@ import {
   Background,
   Controls,
   MarkerType,
-  MiniMap,
   Panel,
   ReactFlow,
   ReactFlowProvider,
@@ -19,25 +18,39 @@ import ArchitectureOccurrenceNodeCard, {
 } from "./components/architecture/ArchitectureOccurrenceNode";
 import ArchitectureDisciplineTabs from "./components/architecture/ArchitectureDisciplineTabs";
 import ArchitectureBoundaryNode from "./components/architecture/ArchitectureBoundaryNode";
-import { ContextSaveQueue, type NavigationGuard } from "./contextSaveQueue";
+import { type NavigationGuard } from "./contextSaveQueue";
 import StudioMenu from "./components/architecture/StudioMenu";
 import ArchitectureObjectDialog, {
   type ArchitectureObjectDraft,
 } from "./components/architecture/ArchitectureObjectDialog";
 import ArchitectureObjectInspector from "./components/architecture/ArchitectureObjectInspector";
+import EnterpriseWorkbench from "./enterprise/EnterpriseWorkbench";
+import InformationWorkbench from "./information/InformationWorkbench";
+import IntegrationWorkbench from "./integration/IntegrationWorkbench";
+import SolutionWorkbench from "./solution/SolutionWorkbench";
 import {
   SEMANTIC_RELATIONSHIP_TYPES,
   type ArchitectureDiscipline,
-  type ArchitectureObject,
   type ArchitectureObjectKind,
   type ArchitectureState,
+  type ArchitectureObject,
   type SemanticRelationshipType,
   type WorkspaceInfo,
 } from "./architectureTypes";
+import type { TraceObjectRef } from "./workbench/workbenchTypes";
+import { api } from "./apiClient";
+import {
+  useArchitectureModel,
+  type GraphDocument,
+  type Integration,
+} from "./workbench/useArchitectureModel";
+import {
+  WorkbenchNavigationProvider,
+  useWorkbenchNavigation,
+} from "./workbench/WorkbenchNavigation";
 import {
   addOccurrence,
   addRelationship,
-  isEditableState,
   moveOccurrence,
   nextFreePosition,
   removeOccurrence,
@@ -52,22 +65,6 @@ import {
   projectStateNodes,
 } from "./architectureCanvasModel";
 import type { ScenarioPhase } from "./scenarioModel";
-
-type GraphDocument = {
-  nodes: { id: string; type: string }[];
-  edges: { targetNodeId: string; targetPortId: string }[];
-};
-
-type Integration = {
-  id: string;
-  name: string;
-  source_system_id: string;
-  target_system_id: string;
-  target_object_id: string;
-  graph: GraphDocument;
-  sample_rows: unknown[];
-  revision: number;
-};
 
 type TestStatus = "passing" | "failing" | "untested" | "error";
 
@@ -106,7 +103,7 @@ function mappedTargetFieldIds(graph: GraphDocument): Set<string> {
 
 type Props = {
   workspace: WorkspaceInfo | null;
-  onOpenIntegration: (integrationId: string, phase?: ScenarioPhase) => void;
+  onOpenIntegration: (integrationId: string, phase?: ScenarioPhase | "scenarios") => void;
   onAddIntegration: (systemId: string) => void;
   onOpenCatalog: () => void;
   search?: string;
@@ -117,41 +114,6 @@ type Props = {
 type RelationshipEdge = Edge<{ relationship: ResolvedRelationship }>;
 
 const nodeTypes = { occurrence: ArchitectureOccurrenceNodeCard, boundary: ArchitectureBoundaryNode };
-
-function csrfToken(): string {
-  const raw = document.cookie.split("; ").find((item) => item.startsWith("dd_csrf="))?.slice(8);
-  if (!raw) throw new Error("Your session could not be verified. Reload and try again.");
-  return decodeURIComponent(raw);
-}
-
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
-  if (init.method && init.method !== "GET") headers.set("X-CSRF-Token", csrfToken());
-  const response = await fetch(path, { ...init, headers });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      detail?: string | { message?: string };
-    };
-    const detail = body.detail;
-    throw new Error(
-      typeof detail === "string" ? detail : detail?.message ?? `Request failed (${response.status}).`,
-    );
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
-}
-
-async function list<T>(path: string): Promise<T[]> {
-  const records: T[] = [];
-  let offset = 0;
-  while (true) {
-    const page = await api<T[]>(`${path}?limit=500&offset=${offset}`);
-    records.push(...page);
-    if (page.length < 500) return records;
-    offset += page.length;
-  }
-}
 
 // crypto.randomUUID is only available in secure contexts (HTTPS or localhost).
 function newId(): string {
@@ -203,34 +165,27 @@ function uniqueCandidateName(states: ArchitectureState[]): string {
 
 export default function ArchitectureCanvas(props: Props) {
   return (
-    <ReactFlowProvider>
-      <ArchitectureCanvasInner {...props} />
-    </ReactFlowProvider>
+    <WorkbenchNavigationProvider>
+      <ReactFlowProvider>
+        <ArchitectureCanvasInner {...props} />
+      </ReactFlowProvider>
+    </WorkbenchNavigationProvider>
   );
 }
 
 function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegration, onOpenCatalog, search = "", registerNavigationGuard, visible = true }: Props) {
   const flow = useReactFlow<ArchitectureOccurrenceNode, RelationshipEdge>();
+  const { requestFocus } = useWorkbenchNavigation();
   const canvasElement = React.useRef<HTMLDivElement>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = React.useState(false);
   const [panMode, setPanMode] = React.useState(false);
-  const [showMinimap, setShowMinimap] = React.useState(false);
-  const [showLabels, setShowLabels] = React.useState(true);
-  const [filterKind, setFilterKind] = React.useState("");
   const [linkContractOpen, setLinkContractOpen] = React.useState(false);
   const [linkContractId, setLinkContractId] = React.useState("");
+  const [integrationOverview, setIntegrationOverview] = React.useState(false);
   const workspaceId = workspace?.id ?? "";
-  const [systems, setSystems] = React.useState<CanonicalSystem[]>([]);
-  const [architectureObjects, setArchitectureObjects] = React.useState<ArchitectureObject[]>([]);
-  const [integrations, setIntegrations] = React.useState<Integration[]>([]);
-  const [states, setStates] = React.useState<ArchitectureState[]>([]);
-  const [activeStateId, setActiveStateId] = React.useState("");
   const [activeDiscipline, setActiveDiscipline] = React.useState<ArchitectureDiscipline>(
     () => workspace ? readStoredDiscipline(workspace.id, workspace.disciplines) : "integration",
   );
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState("");
-  const [saveStatus, setSaveStatus] = React.useState<SaveStatus>("idle");
   const [duplicating, setDuplicating] = React.useState(false);
   const [relationshipType, setRelationshipType] = React.useState<SemanticRelationshipType>("Uses");
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
@@ -240,96 +195,48 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
   const [selectedOccurrenceId, setSelectedOccurrenceId] = React.useState<string | null>(null);
   const [health, setHealth] = React.useState<Record<string, IntegrationHealth>>({});
 
-  const statesRef = React.useRef(states);
-  statesRef.current = states;
-  const saveQueue = React.useRef(new ContextSaveQueue());
-  const loadSequence = React.useRef(0);
-  const mounted = React.useRef(true);
   const viewportByState = React.useRef(new Map<string, { x: number; y: number; zoom: number }>());
-  const dirtyStates = React.useRef(new Set<string>());
+  const {
+    systems,
+    setSystems,
+    architectureObjects,
+    setArchitectureObjects,
+    integrations,
+    setIntegrations,
+    states,
+    statesRef,
+    setStates,
+    activeStateId,
+    setActiveStateId,
+    loading,
+    error,
+    setError,
+    saveStatus,
+    setSaveStatus,
+    saveQueue,
+    dirtyStates,
+    activeState,
+    currentState,
+    editable,
+    systemsById,
+    architectureObjectsById,
+    integrationsById,
+    load,
+    waitForSaves,
+    commit,
+    adoptState,
+    mutateActive,
+  } = useArchitectureModel({ workspaceId, registerNavigationGuard });
 
-  const waitForSaves = React.useCallback(async () => {
-    try {
-      await saveQueue.current.flush();
-      return true;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Resolve the failed save before switching.");
-      return false;
-    }
-  }, []);
+  // Reset canvas-only selection when the workspace changes; the shared model
+  // hook resets its own data as part of loading.
   React.useEffect(() => {
-    registerNavigationGuard?.(waitForSaves);
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      ++loadSequence.current;
-      registerNavigationGuard?.(async () => true);
-    };
-  }, [registerNavigationGuard, waitForSaves]);
-
-  const activeState = states.find((state) => state.id === activeStateId) ?? null;
-  const currentState = states.find((state) => state.state_type === "current") ?? null;
-  const editable = isEditableState(activeState);
-
-  const systemsById = React.useMemo(
-    () => new Map(systems.map((system) => [system.id, system])),
-    [systems],
-  );
-  const architectureObjectsById = React.useMemo(
-    () => new Map(architectureObjects.map((object) => [object.id, object])),
-    [architectureObjects],
-  );
-  const integrationsById = React.useMemo(
-    () => new Map(integrations.map((integration) => [integration.id, integration])),
-    [integrations],
-  );
-
-  const load = React.useCallback(async () => {
-    if (!workspaceId) return;
-    const requestId = ++loadSequence.current;
-    setLoading(true);
-    setError("");
-    try {
-      const [nextSystems, nextIntegrations, nextStates, nextArchitectureObjects] = await Promise.all([
-        list<CanonicalSystem>("/api/catalog/systems"),
-        list<Integration>("/api/integrations"),
-        api<ArchitectureState[]>(`/api/workspaces/${workspaceId}/states`),
-        api<ArchitectureObject[]>(`/api/workspaces/${workspaceId}/architecture-objects`),
-      ]);
-      if (requestId !== loadSequence.current) return;
-      setSystems(nextSystems);
-      setArchitectureObjects(nextArchitectureObjects);
-      setIntegrations(nextIntegrations);
-      setStates(nextStates);
-      setActiveStateId((previous) => {
-        const preferred = previous || readStoredStateId(workspaceId);
-        if (preferred && nextStates.some((state) => state.id === preferred)) return preferred;
-        return (nextStates.find((state) => state.state_type === "current") ?? nextStates[0])?.id ?? "";
-      });
-    } catch (caught) {
-      if (requestId === loadSequence.current) {
-        setError(caught instanceof Error ? caught.message : "Could not load the architecture canvas.");
-      }
-    } finally {
-      if (requestId === loadSequence.current) setLoading(false);
-    }
-  }, [workspaceId]);
-
-  React.useEffect(() => {
-    setStates([]);
-    setActiveStateId("");
     setSelectedEdgeId(null);
     setSelectedOccurrenceId(null);
-    setSaveStatus("idle");
-    setSystems([]);
-    setArchitectureObjects([]);
-    setIntegrations([]);
     setHealth({});
     setAddOpen(false);
     setObjectKindToAdd(null);
-    void load();
-    return () => { ++loadSequence.current; };
-  }, [load]);
+  }, [workspaceId]);
 
   const wasVisible = React.useRef(visible);
   React.useEffect(() => {
@@ -350,15 +257,6 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
   }, [workspaceId, workspace?.disciplines]);
 
   React.useEffect(() => {
-    if (!workspaceId || !activeStateId) return;
-    try {
-      sessionStorage.setItem(activeStateStorageKey(workspaceId), activeStateId);
-    } catch {
-      /* storage unavailable */
-    }
-  }, [workspaceId, activeStateId]);
-
-  React.useEffect(() => {
     if (!workspaceId || !workspace?.disciplines.includes(activeDiscipline)) return;
     try {
       sessionStorage.setItem(activeDisciplineStorageKey(workspaceId), activeDiscipline);
@@ -366,53 +264,6 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
       /* storage unavailable */
     }
   }, [workspaceId, workspace?.disciplines, activeDiscipline]);
-
-  const commit = React.useCallback((next: ArchitectureState) => {
-    if (!workspaceId) return;
-    statesRef.current = statesRef.current.map((state) => state.id === next.id ? next : state);
-    setStates((previous) => previous.map((state) => state.id === next.id ? next : state));
-    setSaveStatus("saving");
-    // Saves are serialized so the last edit always wins on the server.
-    dirtyStates.current.add(next.id);
-    void saveQueue.current.enqueue(next.id, async () => {
-      try {
-        const latest = statesRef.current.find((state) => state.id === next.id) ?? next;
-        const saved = await api<ArchitectureState>(
-          `/api/workspaces/${workspaceId}/states/${next.id}`,
-          {
-            method: "PUT",
-            body: JSON.stringify({ nodes: latest.nodes, relationships: latest.relationships }),
-          },
-        );
-        dirtyStates.current.delete(next.id);
-        if (!mounted.current) return;
-        setStates((previous) => previous.map((state) =>
-          state.id === saved.id ? { ...state, updated_at: saved.updated_at } : state));
-      } catch (caught) {
-        throw caught;
-      }
-    }).then(async () => {
-      await saveQueue.current.flush();
-      if (mounted.current) {
-        setSaveStatus("saved");
-        setError("");
-      }
-    }).catch((caught: unknown) => {
-      if (mounted.current) {
-        setSaveStatus("error");
-        setError(caught instanceof Error ? caught.message : "Could not save the architecture state.");
-      }
-    });
-  }, [workspaceId]);
-
-  const mutateActive = React.useCallback(
-    (mutate: (state: ArchitectureState) => ArchitectureState) => {
-      const state = statesRef.current.find((item) => item.id === activeStateId);
-      if (!state) return;
-      commit(mutate(state));
-    },
-    [activeStateId, commit],
-  );
 
   const handleRemoveOccurrence = React.useCallback((occurrenceId: string) => {
     setSelectedEdgeId(null);
@@ -424,10 +275,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     () => projectStateNodes(activeState, activeDiscipline, architectureObjectsById),
     [activeDiscipline, activeState, architectureObjectsById],
   );
-  const visibleStateNodes = React.useMemo(() => projectedStateNodes.filter((node) => {
-    if (!filterKind) return true;
-    return (architectureObjectsById.get(node.object_id)?.kind ?? "system") === filterKind;
-  }), [projectedStateNodes, filterKind, architectureObjectsById]);
+  const visibleStateNodes = projectedStateNodes;
   const boundaryGeometry = React.useMemo(() => activeState
     ? solutionBoundaryGeometry({ ...activeState, nodes: visibleStateNodes }, architectureObjectsById)
     : new Map<string, BoundaryGeometry>(), [activeState, visibleStateNodes, architectureObjectsById]);
@@ -554,7 +402,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
       id: relationship.id,
       source: relationship.sourceOccurrenceId,
       target: relationship.targetOccurrenceId,
-      label: showLabels ? integrationName ? `${relationship.type.toLowerCase()} · ${integrationName}` : relationship.type.toLowerCase() : undefined,
+      label: integrationName ? `${relationship.type.toLowerCase()} · ${integrationName}` : relationship.type.toLowerCase(),
       selected,
       data: { relationship },
       labelShowBg: true,
@@ -568,7 +416,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
       },
       markerEnd: { type: MarkerType.ArrowClosed, color },
     };
-  }), [health, integrationsById, relationships, selectedEdgeId, showLabels, boundaryGeometry]);
+  }), [health, integrationsById, relationships, selectedEdgeId, boundaryGeometry]);
 
   const selectedRelationship = relationships.find((rel) => rel.id === selectedEdgeId) ?? null;
   const selectedOccurrence = visibleStateNodes.find(
@@ -738,7 +586,6 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     setActiveStateId(stateId);
     setSelectedEdgeId(null);
     setSelectedOccurrenceId(null);
-    setFilterKind("");
     const viewport = viewportByState.current.get(stateId);
     if (viewport) void flow.setViewport(viewport);
   }
@@ -761,22 +608,37 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     return <div className="landscape-empty" role="status">Loading workspace…</div>;
   }
 
+  const informationMode = activeDiscipline === "information";
+  const solutionMode = activeDiscipline === "solution";
+  const enterpriseMode = activeDiscipline === "enterprise";
+  const integrationMode = activeDiscipline === "integration";
+  const workbenchMode =
+    informationMode || solutionMode || enterpriseMode || (integrationMode && !integrationOverview);
   const onCanvasObjectIds = new Set(activeState?.nodes.map((node) => node.object_id) ?? []);
-  const paletteKinds: ArchitectureObjectKind[] = activeDiscipline === "enterprise"
-    ? ["business_requirement", "business_capability"]
-    : activeDiscipline === "information"
-      ? ["information_object"]
-      : activeDiscipline === "solution"
-        ? ["solution_boundary", "component", "interface"]
-        : workspace.disciplines.includes("solution") ? ["interface"] : [];
-  const paletteLabels: Record<ArchitectureObjectKind, string> = {
-    business_requirement: "Requirement",
-    business_capability: "Capability",
-    information_object: "Information Object",
-    solution_boundary: "Solution Boundary",
-    component: "Component",
-    interface: "Interface",
-  };
+  // The only remaining generic-canvas palette entry is the Solution interface on
+  // the integration overview; the four discipline workbenches own their own editors.
+  const paletteKinds: ArchitectureObjectKind[] = workspace.disciplines.includes("solution")
+    ? ["interface"]
+    : [];
+  const paletteLabels: Partial<Record<ArchitectureObjectKind, string>> = { interface: "Interface" };
+
+  function handleNavigateTrace(node: TraceObjectRef) {
+    // Ask the destination workbench to select and reveal the object; the
+    // discipline switch below mounts that workbench, which then consumes the
+    // focus request once its model has loaded.
+    requestFocus(node);
+    const discipline = node.discipline as ArchitectureDiscipline | null;
+    if (discipline && workspace?.disciplines.includes(discipline) && discipline !== activeDiscipline) {
+      setActiveDiscipline(discipline);
+      setSelectedEdgeId(null);
+      setSelectedOccurrenceId(null);
+    }
+    const occurrence = activeState?.nodes.find((item) => item.object_id === node.id);
+    if (occurrence) {
+      setSelectedOccurrenceId(occurrence.occurrence_id);
+      setInspectorCollapsed(false);
+    }
+  }
 
   return (
     <section className="architecture-canvas-workspace">
@@ -793,11 +655,10 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
               setActiveDiscipline(discipline);
               setSelectedEdgeId(null);
               setSelectedOccurrenceId(null);
-              setFilterKind("");
             });
           }}
         />}
-        addMenu={<StudioMenu label="+ Add Object" disabled={!editable || loading} className="studio-add-menu">
+        addMenu={workbenchMode ? null : <StudioMenu label="+ Add Object" disabled={!editable || loading} className="studio-add-menu">
           <p className="studio-menu-caption">{activeDiscipline} objects</p>
           {paletteKinds.map((kind) => <button key={kind} type="button" onClick={() => setObjectKindToAdd(kind)}>{paletteLabels[kind]}</button>)}
           <button type="button" onClick={() => setAddOpen(true)}>Existing system</button>
@@ -814,17 +675,11 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
           </>}
         </StudioMenu>}
         options={<StudioMenu label="View options">
-          <p className="studio-menu-caption">Canvas</p>
-          <label><input type="checkbox" checked={showLabels} onChange={(event) => setShowLabels(event.target.checked)} /> Relationship labels</label>
-          <label><input type="checkbox" checked={showMinimap} onChange={(event) => setShowMinimap(event.target.checked)} /> Minimap</label>
-          <label>Object type<select aria-label="Filter object type" value={filterKind} onChange={(event) => {
-            setFilterKind(event.target.value);
-            setSelectedOccurrenceId(null);
-            setSelectedEdgeId(null);
-          }}><option value="">All types</option><option value="system">Systems</option>
-            {paletteKinds.map((kind) => <option key={kind} value={kind}>{paletteLabels[kind]}</option>)}
-          </select></label>
-          <hr />
+          {integrationMode && (
+            <button type="button" onClick={() => setIntegrationOverview((value) => !value)}>
+              {integrationOverview ? "Integration designer" : "Architecture canvas"}
+            </button>
+          )}
           <button type="button" disabled={!currentState || duplicating} onClick={() => void handleDuplicateCurrent()}>{duplicating ? "Creating…" : "New candidate from Current"}</button>
           {editable && <button type="button" className="architecture-danger" onClick={() => void handleDeleteState()}>Delete {activeState?.state_type}</button>}
         </StudioMenu>}
@@ -840,7 +695,50 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
         }}>Retry save</button>}
         {saveStatus !== "error" && <button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button>}
       </div>}
-      {loading && states.length === 0 ? (
+      {integrationMode && !integrationOverview ? (
+        <IntegrationWorkbench
+          workspaceId={workspaceId}
+          activeState={activeState}
+          editable={editable}
+          saveStatus={saveStatus}
+          search={search}
+          onOpenIntegration={onOpenIntegration}
+          onOpenCatalog={onOpenCatalog}
+          onNavigateTrace={handleNavigateTrace}
+        />
+      ) : enterpriseMode ? (
+        <EnterpriseWorkbench
+          workspaceId={workspaceId}
+          activeState={activeState}
+          editable={editable}
+          saveStatus={saveStatus}
+          search={search}
+          onOpenCatalog={onOpenCatalog}
+          onNavigateTrace={handleNavigateTrace}
+        />
+      ) : informationMode ? (
+        <InformationWorkbench
+          workspaceId={workspaceId}
+          activeState={activeState}
+          editable={editable}
+          saveStatus={saveStatus}
+          search={search}
+          onAdoptState={adoptState}
+          mutateActive={mutateActive}
+          onOpenCatalog={onOpenCatalog}
+          onNavigateTrace={handleNavigateTrace}
+        />
+      ) : solutionMode ? (
+        <SolutionWorkbench
+          workspaceId={workspaceId}
+          activeState={activeState}
+          editable={editable}
+          saveStatus={saveStatus}
+          search={search}
+          onOpenCatalog={onOpenCatalog}
+          onNavigateTrace={handleNavigateTrace}
+        />
+      ) : loading && states.length === 0 ? (
         <div className="landscape-empty" role="status">Loading architecture states…</div>
       ) : activeState && activeState.nodes.length === 0 && !editable ? (
         <div className="landscape-empty">
@@ -936,9 +834,6 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
                   void flow.fitView({ nodes: [{ id: node.occurrence_id }], maxZoom: 1.2, duration: 200 });
                 }}>{resolveOccurrence(node, systemsById, editable, architectureObjectsById).name}</button>)}
               </Panel>}
-              {showMinimap && (
-                <MiniMap position="bottom-left" pannable zoomable style={{ width: 132, height: 82, bottom: 44 }} nodeColor="var(--color-border-strong)" maskColor="var(--color-minimap-mask)" />
-              )}
             </ReactFlow>
           </div>
           {inspectorCollapsed && (selectedRelationship || selectedOccurrence) && <button type="button" className="studio-reopen-inspector" onClick={() => setInspectorCollapsed(false)}>Open inspector</button>}
@@ -990,6 +885,9 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
                 setSelectedOccurrenceId(null);
               }}
               onRemove={editable ? () => handleRemoveOccurrence(selectedOccurrence.occurrence_id) : undefined}
+              workspaceId={workspaceId}
+              stateId={activeState?.id ?? null}
+              onNavigateTrace={handleNavigateTrace}
               onOpenCatalog={
                 workspace.disciplines.some((discipline) =>
                   discipline === "enterprise" || discipline === "information")

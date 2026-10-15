@@ -1,0 +1,4 @@
+Name,Description or purpose,Source System,Target System,Source Object,Target Object,Integration Type,Owner,Lifecycle,External ID,Existing contract reference
+CRM to Billing,Creates invoices for new customers,Customer CRM,Billing Platform,,,request-response,Integration Team,active,INT-CRM-BILL,
+Billing to Gateway,Sends settlement files,Billing Platform,Payment Gateway,,,one-way,Integration Team,active,INT-BILL-PG,
+Ambiguous export,,Customer CRM,Legacy Reporting,,,one-way,,,,

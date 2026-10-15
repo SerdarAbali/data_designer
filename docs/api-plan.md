@@ -12,6 +12,7 @@ This document defines a first REST API boundary for implementation planning. Exa
 | Integrations | Endpoints, sample rows, graph, dependencies | Graph save validates stable field references and current revision |
 | Simulation | Dry-run of saved/draft graph | Calls the pure engine; no external connector writes |
 | Landscape/analysis | Read projections, conflicts, dependency health, positions | Derived data; tenant-safe and explainable |
+| Imports | Guided Excel/CSV import of systems, information objects, integrations, and solutions | Workspace-scoped batches; preview before commit; batch-scoped undo; no connectors |
 | Connectors (future) | Discovery/binding and optional execution capabilities | Separate adapters; core API/domain remains functional without one |
 
 Use consistent pagination, request IDs, error envelopes, and validation codes. API-generated TypeScript types or schema contract tests must prevent frontend/backend drift.
@@ -52,6 +53,23 @@ GET             /api/integrations/architecture
 Create accepts tenant-owned source/target system and object IDs, name, optional description, generic trigger configuration, `version: 1` request graph, optional `version: 1` `response_graph`, `interaction_type`, and at most 100 source sample rows/64 KiB serialized. `interaction_type` is `ONE_WAY` by default and may be `REQUEST_RESPONSE` or `ASYNC_CALLBACK`. Empty graph nodes/edges are accepted when an integration is first created. Graph saves require `expected_revision`; they may atomically update both graphs, interaction type, name, and sample rows. Every successful integration or graph update increments the current revision. A stale revision returns `409` with `code: "revision_conflict"` and the current revision. Dependency endpoints represent upstream → downstream and reject cycles and duplicates.
 
 Graph node/edge IDs are UUIDs. Edge endpoint keys use the master-spec camelCase spelling (`sourceNodeId`, `sourcePortId`, `targetNodeId`, `targetPortId`); field ports use `field:<field-uuid>`. The server validates active ownership against the selected endpoint object and persists only stable IDs, never display names. Direct source-to-target field connections require equal generic `data_type`; transformed type compatibility is checked by the engine. Graph save validates operation-specific node configuration against the engine's allowlist before persistence. Graph errors return stable codes with JSON paths. Limits are 200 nodes, 500 edges, 256 KiB per graph, and 8 KiB per node configuration. Mutations use session authentication and CSRF protection. The current request/response graph and sample field-reference index is updated in the same transaction, allowing catalog deletion to return a same-tenant `409` until its active integrations are archived or their references are removed. `response_graph` uses the same document structure as `graph`, but is validated from the integration's target object to its source object; display names do not replace field UUID references.
+
+### Architecture imports
+
+`/api/workspaces/{workspace_id}/imports` provides the guided import of existing
+architecture data. `POST …/preview` validates and matches parsed rows without
+writing anything. `POST …/commit` re-validates, applies the per-row decisions
+(create, update, use existing, skip), and records an `import_batches` row with
+per-row `import_row_results` (provenance plus before/after snapshots).
+`GET …/imports` lists batches, `GET …/imports/{batch_id}` returns row detail for
+error downloads, and `POST …/imports/{batch_id}/undo` reverses one batch only,
+reporting conflicts for records that were changed or are still referenced.
+
+`POST /api/workspaces/{workspace_id}/states/{state_id}/include-objects` appends
+explicitly selected imported systems, architecture objects, and contracts to an
+architecture state. It is the controlled, append-only enrichment path for the
+read-only Current state: nothing is placed automatically, and the general state
+update endpoint still rejects Current.
 
 ### Design-time scenarios
 

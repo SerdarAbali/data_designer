@@ -185,6 +185,65 @@ it. The app lists the contracts that block the archive; remove the mapping
 or archive the contract first. Scenarios never block archives (see
 [§6.8](#68-missing-references)).
 
+### Importing existing architecture from Excel or CSV
+
+Open **Catalog** and choose **Import from Excel or CSV**. One guided wizard is
+shared by all four import types:
+
+1. **File, sheet & mapping** — upload a `.csv` or `.xlsx` file, pick the
+   worksheet, choose the import type (Systems, Information objects,
+   Integrations, or Solutions), then map the file's columns to application
+   fields. Required fields are marked with `*`, and the mapping is
+   pre-suggested from your headers. **Download CSV template** produces a
+   starting file.
+2. **Review changes** — the preview shows every parsed row with its match and
+   any validation problems. For each row choose **Use existing**, **Create
+   new**, **Update existing**, or **Skip**. When a row resembles an existing
+   record by name only, the wizard says *similar name — confirm*: nothing is
+   merged until you explicitly pick that record. Tick the confirmation box to
+   enable **Apply N changes**.
+3. **Results, undo & Current view** — the results list shows how many rows were
+   created, updated, matched, skipped, blocked, and failed. Use **Download row
+   errors** for a row-level report and **Undo import** to reverse the whole
+   batch.
+
+Field reference:
+
+| Import type | Required | Optional |
+|---|---|---|
+| Systems | Name | Description, Owner, Business domain, Lifecycle, Status, Technology, External ID, Aliases (`;`-separated) |
+| Information objects | Name, Owner, Authoritative system | Description, Classification, External ID |
+| Integrations | Name, Source system, Target system | Description or purpose, Source object, Target object, Integration type (`ONE_WAY`, `REQUEST_RESPONSE`, `ASYNC_CALLBACK`), Owner, Lifecycle, External ID, Existing contract reference |
+| Solutions | Solution name, Included systems (`;`-separated) | Description, Owner, External ID |
+
+Matching runs in a fixed order: **external ID**, then **exact normalized name**,
+then an **existing alias**, then a **similar-name suggestion** that always needs
+your confirmation. Authoritative systems, integration endpoints, and solution
+members must resolve to canonical catalog systems; a row is blocked with an
+explanation when a reference cannot be resolved. Integration rows reuse a
+system's single catalog object when you do not provide an object column, and
+they block when a system has no object or several. Imported integrations get
+empty graphs — the import never duplicates or rewrites schemas, mappings,
+transformations, or tests.
+
+Re-importing the same file matches the records created earlier, so repeated
+runs update or skip instead of creating duplicates. Provenance is kept per row
+(source file, sheet, row number, external ID, batch, and date) and the last
+fifty imports stay listed under **Recent imports** in the wizard, where you can
+undo a batch after a refresh.
+
+Imported objects are not placed on the canvas automatically. After a commit,
+**Use in Current architecture** lets you tick exactly which imported systems,
+information objects, integrations, and solution memberships appear, then adds
+only that selection. Undo is conservative: it reverses only that batch, refuses
+to delete a record that other batches still reference, refuses to overwrite a
+record you edited after the import, and reports each conflict instead of
+guessing. Once the blocking reference is removed, run **Undo** again to finish.
+
+Limits: 1 MiB CSV or 2 MiB `.xlsx`, 500 data rows, 64 columns, and 2000
+characters per cell. Formula cells and formula-like text are rejected rather
+than modified.
+
 ---
 
 ## 4. Contract Designer
@@ -602,6 +661,8 @@ end-to-end* scenario are a ready-made example.
 | Test data | 100 rows, 64 KiB per contract |
 | Mapping graph | 200 nodes, 500 edges, 256 KiB; 8 KiB per node config |
 | CSV import | 1 MiB, 500 rows |
+| Architecture import | 1 MiB CSV / 2 MiB `.xlsx`, 500 rows, 64 columns, 2000 characters per cell |
+| Architecture import batches | Last 50 listed; batch-scoped undo available until every row is reversed |
 | Scenario | 200 steps, 30 participants, 50 contracts, 200 assertions, blocks nested 3 deep, 256 KiB |
 | System metadata JSON | 16 KiB |
 

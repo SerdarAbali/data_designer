@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.catalog.service import next_position
 from app.models import (
     CatalogField,
     CatalogObject,
@@ -229,7 +228,9 @@ def fork_workspace(
         remapped_err_graph = _remap_uuids_in_json(i.error_response_graph, uuid_str_map)
         remapped_sample = _remap_uuids_in_json(i.sample_source_records, uuid_str_map)
 
-        err_obj_id = object_map.get(i.error_response_object_id) if i.error_response_object_id else None
+        err_obj_id = (
+            object_map.get(i.error_response_object_id) if i.error_response_object_id else None
+        )
 
         db.add(
             Integration(
@@ -266,7 +267,9 @@ def fork_workspace(
     )
     for sc in source_scenarios:
         new_id = uuid4()
-        new_scope_id = integration_map.get(sc.scope_integration_id) if sc.scope_integration_id else None
+        new_scope_id = (
+            integration_map.get(sc.scope_integration_id) if sc.scope_integration_id else None
+        )
         remapped_doc = _remap_uuids_in_json(sc.document, uuid_str_map)
 
         db.add(
@@ -522,12 +525,25 @@ def import_workspace_bundle(db: Session, new_tenant: Tenant, bundle: dict) -> No
         integration_map[old_id] = new_id
         uuid_str_map[old_id] = str(new_id)
 
-        err_obj = object_map.get(i_data["error_response_object_id"]) if i_data.get("error_response_object_id") else None
+        err_obj = (
+            object_map.get(i_data["error_response_object_id"])
+            if i_data.get("error_response_object_id")
+            else None
+        )
 
-        remapped_graph = _remap_uuids_in_json(i_data.get("graph", {"version": 1, "nodes": [], "edges": []}), uuid_str_map)
-        remapped_resp_graph = _remap_uuids_in_json(i_data.get("response_graph", {"version": 1, "nodes": [], "edges": []}), uuid_str_map)
-        remapped_err_graph = _remap_uuids_in_json(i_data.get("error_response_graph", {"version": 1, "nodes": [], "edges": []}), uuid_str_map)
-        remapped_sample = _remap_uuids_in_json(i_data.get("sample_source_records", []), uuid_str_map)
+        remapped_graph = _remap_uuids_in_json(
+            i_data.get("graph", {"version": 1, "nodes": [], "edges": []}), uuid_str_map
+        )
+        remapped_resp_graph = _remap_uuids_in_json(
+            i_data.get("response_graph", {"version": 1, "nodes": [], "edges": []}), uuid_str_map
+        )
+        remapped_err_graph = _remap_uuids_in_json(
+            i_data.get("error_response_graph", {"version": 1, "nodes": [], "edges": []}),
+            uuid_str_map,
+        )
+        remapped_sample = _remap_uuids_in_json(
+            i_data.get("sample_source_records", []), uuid_str_map
+        )
 
         db.add(
             Integration(
@@ -555,7 +571,11 @@ def import_workspace_bundle(db: Session, new_tenant: Tenant, bundle: dict) -> No
 
     for sc_data in bundle.get("scenarios", []):
         new_id = uuid4()
-        new_scope = integration_map.get(sc_data["scope_integration_id"]) if sc_data.get("scope_integration_id") else None
+        new_scope = (
+            integration_map.get(sc_data["scope_integration_id"])
+            if sc_data.get("scope_integration_id")
+            else None
+        )
         remapped_doc = _remap_uuids_in_json(sc_data.get("document", {}), uuid_str_map)
         db.add(
             Scenario(

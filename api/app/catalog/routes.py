@@ -218,6 +218,7 @@ def create_system(
         kind=payload.kind,
         icon=payload.icon,
         color=payload.color,
+        external_identifier=payload.external_identifier,
         position=payload.position,
         binding_state=payload.binding_state,
         extra_metadata=payload.metadata,

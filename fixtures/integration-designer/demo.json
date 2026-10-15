@@ -1,0 +1,120 @@
+{
+  "candidate_name": "Integration Demo Draft",
+  "workspace_name": "Integration Architecture Demo",
+  "disciplines": ["integration", "solution"],
+  "systems": [
+    {
+      "key": "crm",
+      "name": "CRM",
+      "kind": "custom platform",
+      "objects": [
+        {
+          "key": "customer",
+          "name": "Customer",
+          "fields": [
+            { "key": "customer_name", "name": "customer_name", "data_type": "string" }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "erp",
+      "name": "ERP",
+      "kind": "custom platform",
+      "objects": [
+        {
+          "key": "account",
+          "name": "Account",
+          "fields": [
+            { "key": "account_code", "name": "account_code", "data_type": "string" }
+          ]
+        }
+      ]
+    }
+  ],
+  "solution": {
+    "name": "Customer Integration Platform",
+    "components": [
+      {
+        "key": "integration",
+        "name": "Integration Service",
+        "component_type": "service",
+        "technology": "FastAPI",
+        "responsibility": "Mediate customer and account synchronisation."
+      }
+    ]
+  },
+  "interfaces": [
+    {
+      "key": "inbound",
+      "name": "Customer Inbound API",
+      "component": "integration",
+      "direction": "provided",
+      "interface_kind": "sync",
+      "protocol": "HTTPS",
+      "operations": [
+        { "name": "CreateCustomer", "operation_kind": "operation" },
+        { "name": "CustomerCreated", "operation_kind": "event" }
+      ]
+    },
+    {
+      "key": "erp_client",
+      "name": "ERP Client",
+      "component": "integration",
+      "direction": "required",
+      "interface_kind": "sync",
+      "protocol": "HTTPS",
+      "operations": [
+        { "name": "UpsertAccount", "operation_kind": "operation" }
+      ]
+    }
+  ],
+  "contract": {
+    "name": "Customer to Account sync",
+    "description": "Push customer changes from CRM into the ERP chart of accounts.",
+    "source": { "system": "crm", "object": "customer", "field": "customer_name" },
+    "target": { "system": "erp", "object": "account", "field": "account_code" },
+    "interaction_type": "REQUEST_RESPONSE",
+    "pattern": "request_reply",
+    "implementation_status": "built",
+    "producer_interface": "inbound",
+    "consumer_interface": "erp_client",
+    "specification": {
+      "retry": { "max_attempts": 3, "backoff": "exponential" },
+      "timeout_ms": 5000,
+      "idempotent": true,
+      "idempotency_key_field_id": "customer_name",
+      "security": { "auth_type": "oauth2", "notes": "mTLS between integration and ERP." },
+      "routing": "Route by customer region",
+      "orchestration_role": "orchestration",
+      "error_handling": "Retry, then dead-letter queue"
+    },
+    "mappings": [{ "source": "customer_name", "target": "account_code", "transform": "upper" }],
+    "response_mappings": [
+      { "source": "account_code", "target": "customer_name", "transform": "upper" }
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "Happy customer sync",
+      "category": "happy_path",
+      "phase": "request",
+      "sample_values": { "customer_name": "acme" },
+      "expected_values": { "account_code": "ACME" }
+    },
+    {
+      "name": "Rejected account",
+      "category": "error",
+      "phase": "request",
+      "sample_values": { "customer_name": "bad" },
+      "expected_values": { "account_code": "WRONG" }
+    },
+    {
+      "name": "Async callback",
+      "category": "alternative",
+      "phase": "request",
+      "sample_values": { "customer_name": "deferred" },
+      "expected_values": { "account_code": "DEFERRED" }
+    }
+  ]
+}

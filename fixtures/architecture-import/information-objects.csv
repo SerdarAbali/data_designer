@@ -1,0 +1,5 @@
+Name,Description,Owner,Authoritative System,Classification,External ID
+Customer,Customer master record,Data Office,Customer CRM,Confidential,IO-CUSTOMER
+Invoice,Issued invoice record,Finance Systems,Billing Platform,Internal,IO-INVOICE
+Payment Transaction,Settled card transaction,Payments Team,PayGW,Confidential,IO-PAYMENT
+Unknown Object,Owner cannot be resolved,Data Office,Missing System,Internal,IO-MISSING
