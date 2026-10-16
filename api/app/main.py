@@ -11,6 +11,7 @@ from app.architecture.traceability import router as architecture_traceability_ro
 from app.auth.routes import router as auth_router
 from app.catalog.routes import router as catalog_router
 from app.db import check_database
+from app.helper_actions.routes import router as helper_actions_router
 from app.imports.routes import router as imports_router
 from app.integrations.integration_design import router as integration_design_router
 from app.integrations.routes import router as integrations_router
@@ -46,6 +47,7 @@ app.include_router(architecture_enterprise_router)
 app.include_router(architecture_traceability_router)
 app.include_router(integration_design_router)
 app.include_router(imports_router)
+app.include_router(helper_actions_router)
 
 
 @app.get("/health", tags=["health"])

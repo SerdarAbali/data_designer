@@ -23,6 +23,12 @@ from app.models.architecture_object import (
 )
 from app.models.auth import AuthSession, Tenant, User
 from app.models.catalog import CatalogField, CatalogObject, CatalogSystem
+from app.models.helper_action import (
+    CHANGE_SET_STATUSES,
+    HelperAuditEvent,
+    HelperChangeOperation,
+    HelperChangeSet,
+)
 from app.models.import_batch import ImportBatch, ImportRowResult
 from app.models.integration import Integration, IntegrationDependency, IntegrationFieldRef
 from app.models.scenario import Scenario
@@ -43,8 +49,12 @@ __all__ = [
     "CatalogField",
     "CatalogObject",
     "CatalogSystem",
+    "CHANGE_SET_STATUSES",
     "DataRepository",
     "DeploymentNode",
+    "HelperAuditEvent",
+    "HelperChangeOperation",
+    "HelperChangeSet",
     "ImportBatch",
     "ImportRowResult",
     "Integration",

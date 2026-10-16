@@ -22,9 +22,11 @@ POSTGRES_URL = "postgresql+psycopg://unused:unused@localhost/unused"
 
 # Alembic's default version_num column width.
 VERSION_COLUMN_LENGTH = 32
-EXPECTED_HEAD = "0018_demo_workspaces"
+EXPECTED_HEAD = "0020_helper_apply_undo"
 BASE_0016 = "0016_traceability"
 EXPECTED_0017 = "0017_integration_integrity"
+EXPECTED_0018 = "0018_demo_workspaces"
+EXPECTED_0019 = "0019_helper_actions"
 
 
 def _config() -> Config:
@@ -78,7 +80,12 @@ def test_fresh_base_to_head_chain_is_linear_and_reaches_expected_head():
 def test_upgrade_from_0016_to_head_includes_new_revisions():
     chain = _linear_chain()
     assert BASE_0016 in chain
-    assert chain[chain.index(BASE_0016) + 1 :] == [EXPECTED_0017, EXPECTED_HEAD]
+    assert chain[chain.index(BASE_0016) + 1 :] == [
+        EXPECTED_0017,
+        EXPECTED_0018,
+        EXPECTED_0019,
+        EXPECTED_HEAD,
+    ]
 
 
 def test_current_development_revision_is_head_and_compatible():
@@ -87,7 +94,7 @@ def test_current_development_revision_is_head_and_compatible():
     assert head is not None
     # The development database is stamped at this head, so it must remain the head.
     assert head.revision == EXPECTED_HEAD
-    assert head.down_revision == EXPECTED_0017
+    assert head.down_revision == EXPECTED_0019
 
 
 def test_offline_upgrade_from_base_to_head_generates_demo_columns():
@@ -98,3 +105,9 @@ def test_offline_upgrade_from_base_to_head_generates_demo_columns():
     assert f"UPDATE alembic_version SET version_num='{EXPECTED_HEAD}'" in sql
     assert "ALTER TABLE workspaces ADD COLUMN demo_preset" in sql
     assert "ALTER TABLE workspaces ADD COLUMN demo_assets" in sql
+    assert "CREATE TABLE helper_change_sets" in sql
+    assert "CREATE TABLE helper_change_operations" in sql
+    assert "CREATE TABLE helper_audit_events" in sql
+    assert "ADD COLUMN apply_summary" in sql
+    assert "ADD COLUMN ownership" in sql
+    assert "ADD COLUMN post_fingerprint" in sql
