@@ -24,7 +24,9 @@ type Props = {
   index: EnterpriseArchitectureIndex | null;
   outcomes?: ReadonlyMap<string, StepOutcome>;
   selectedStepId?: string | null;
+  ariaLabel?: string;
   onOpenContractPhase?: (contractId: string, phase: ScenarioPhase) => void;
+  onSelectStep?: (stepId: string) => void;
 };
 
 function messageColor(message: LayoutMessage): string {
@@ -51,7 +53,9 @@ export default function SequenceDiagram({
   index,
   outcomes,
   selectedStepId,
+  ariaLabel = "Scenario sequence diagram",
   onOpenContractPhase,
+  onSelectStep,
 }: Props) {
   const layout = React.useMemo(() => layoutSequence(document, index, outcomes), [document, index, outcomes]);
   const markerId = React.useId().replace(/:/g, "");
@@ -73,7 +77,7 @@ export default function SequenceDiagram({
         height={layout.height}
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         role="group"
-        aria-label="Scenario sequence diagram"
+        aria-label={ariaLabel}
       >
         <defs>
           {(["request", "success-response", "error-response", "neutral", "missing"] as const).map((key) => (
@@ -156,6 +160,8 @@ export default function SequenceDiagram({
               ? message.phase === "async-response" ? "success-response" : message.phase
               : "neutral";
           const clickable = !!message.contractId && !!message.phase && !message.missing && !!onOpenContractPhase;
+          const selectable = !!onSelectStep && !message.missing;
+          const interactive = clickable || selectable;
           const textX = message.self ? message.fromX + 8 : (message.fromX + message.toX) / 2;
           const anchor = message.self ? "start" : "middle";
           const labelY = message.self ? message.y - 6 : message.y - 8;
@@ -165,10 +171,11 @@ export default function SequenceDiagram({
             message.missing,
             message.status ? `Mapping status: ${message.status}` : null,
             message.outcome ? OUTCOME_LABELS[message.outcome] : null,
-            clickable ? "Opens the contract phase" : null,
+            clickable ? "Opens the contract phase" : selectable ? "Opens the operation" : null,
           ].filter(Boolean).join(". ");
           const open = () => {
             if (clickable) onOpenContractPhase!(message.contractId!, message.phase!);
+            else if (selectable) onSelectStep!(message.stepId);
           };
           return (
             <g
@@ -178,14 +185,14 @@ export default function SequenceDiagram({
                 message.missing ? "missing" : "",
                 message.outcome ? `outcome-${message.outcome}` : "",
                 selectedStepId === message.stepId ? "selected" : "",
-                clickable ? "clickable" : "",
+                interactive ? "clickable" : "",
               ].filter(Boolean).join(" ")}
               data-step-id={message.stepId}
-              role={clickable ? "button" : undefined}
-              tabIndex={clickable ? 0 : undefined}
+              role={interactive ? "button" : undefined}
+              tabIndex={interactive ? 0 : undefined}
               aria-label={description}
-              onClick={clickable ? open : undefined}
-              onKeyDown={clickable ? (event) => {
+              onClick={interactive ? open : undefined}
+              onKeyDown={interactive ? (event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   open();

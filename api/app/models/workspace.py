@@ -39,6 +39,12 @@ class Workspace(Base):
         nullable=False,
         default=lambda: ["enterprise", "information", "solution", "integration"],
     )
+    demo_preset: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    demo_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    demo_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    demo_assets: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

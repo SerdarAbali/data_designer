@@ -1,6 +1,6 @@
 """Add referential integrity for integration producer/consumer interface links.
 
-Revision ID: 0017_integration_interface_integrity
+Revision ID: 0017_integration_integrity
 Revises: 0016_traceability
 """
 
@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0017_integration_interface_integrity"
+revision: str = "0017_integration_integrity"
 down_revision: str | None = "0016_traceability"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

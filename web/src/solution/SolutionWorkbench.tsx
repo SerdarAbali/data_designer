@@ -1,14 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Viewport } from "@xyflow/react";
 
+import { moveOccurrence } from "../architectureCanvasModel";
 import type { ArchitectureState } from "../architectureTypes";
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
 import ObjectTracePanel from "../components/architecture/ObjectTracePanel";
 import type { TraceObjectRef } from "../workbench/workbenchTypes";
 import { useWorkbenchNavigation } from "../workbench/WorkbenchNavigation";
 import ComponentEditorPanel, { type InterfaceDraft } from "./ComponentEditorPanel";
+import DeploymentEditorPanel from "./DeploymentEditorPanel";
 import InterfaceEditorPanel from "./InterfaceEditorPanel";
 import OperationEditorPanel from "./OperationEditorPanel";
+import RepositoryEditorPanel from "./RepositoryEditorPanel";
+import TrustBoundaryEditorPanel from "./TrustBoundaryEditorPanel";
 import SolutionBreadcrumb, { type BreadcrumbStep } from "./SolutionBreadcrumb";
+import SolutionContextEditor from "./SolutionContextEditor";
+import { solutionLog } from "./solutionLog";
 import {
   addSolutionMember,
   createComponent,
@@ -19,26 +26,36 @@ import {
   createSolution,
   createTrustBoundary,
   deleteComponent,
+  deleteDeploymentNode,
   deleteInterface,
   deleteOperation,
+  deleteRepository,
+  deleteTrustBoundary,
   fetchSolutionDesign,
   linkComponentDeployment,
   linkComponentRepository,
+  linkInterfaceConnection,
   linkInterfaceTrustBoundary,
+  linkTrustBoundaryContainment,
   listSolutions,
   removeSolutionMember,
   updateComponent,
+  updateDeploymentNode,
   updateInterface,
   updateOperation,
+  updateRepository,
   updateSolution,
-  type SolutionComponent,
+  updateTrustBoundary,
   type SolutionDesign,
-  type SolutionInterface,
   type SolutionOperation,
   type SolutionSummary,
 } from "./solutionModel";
-import SolutionSequenceView from "./SolutionSequenceView";
-import { solutionLog } from "./solutionLog";
+import SolutionContextView from "./SolutionContextView";
+import SolutionDecompositionView from "./SolutionDecompositionView";
+import SolutionDeploymentView from "./SolutionDeploymentView";
+import SolutionInteractionView from "./SolutionInteractionView";
+import SolutionTrustView from "./SolutionTrustView";
+import type { Point } from "./solutionCanvasModel";
 
 type Props = {
   workspaceId: string;
@@ -48,21 +65,30 @@ type Props = {
   search?: string;
   onAdoptState?: (state: ArchitectureState) => void;
   mutateActive?: (mutate: (state: ArchitectureState) => ArchitectureState) => void;
+  onReloadStates?: () => void;
   onOpenCatalog?: () => void;
   onNavigateTrace?: (node: TraceObjectRef) => void;
 };
 
-type View = "context" | "components" | "repositories" | "deployment" | "trust" | "sequence";
+type View = "context" | "decomposition" | "deployment" | "trust" | "interaction";
 
 type CatalogSystem = { id: string; name: string; kind: string };
 
+type Selection =
+  | { kind: "solution" }
+  | { kind: "component"; componentId: string }
+  | { kind: "interface"; componentId: string; interfaceId: string }
+  | { kind: "operation"; componentId: string; interfaceId: string; operationId: string }
+  | { kind: "repository"; repositoryId: string }
+  | { kind: "deployment"; deploymentId: string }
+  | { kind: "trust"; trustId: string };
+
 const VIEWS: { id: View; label: string }[] = [
   { id: "context", label: "Context" },
-  { id: "components", label: "Decomposition" },
-  { id: "repositories", label: "Repositories" },
+  { id: "decomposition", label: "Decomposition" },
   { id: "deployment", label: "Deployment" },
   { id: "trust", label: "Trust boundaries" },
-  { id: "sequence", label: "Interaction" },
+  { id: "interaction", label: "Interaction" },
 ];
 
 export default function SolutionWorkbench({
@@ -71,6 +97,8 @@ export default function SolutionWorkbench({
   editable,
   saveStatus,
   search = "",
+  mutateActive,
+  onReloadStates,
   onOpenCatalog,
   onNavigateTrace,
 }: Props) {
@@ -86,10 +114,12 @@ export default function SolutionWorkbench({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
-  const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
-  const [selectedInterfaceId, setSelectedInterfaceId] = useState<string | null>(null);
-  const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection>({ kind: "solution" });
+  const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
   const [systems, setSystems] = useState<CatalogSystem[]>([]);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const viewportRef = useRef<Record<string, Viewport>>({});
+  const viewportKey = `${selectedSolutionId ?? ""}:${view}`;
 
   const isEditable = editable && design?.state_type !== "current";
 
@@ -132,9 +162,8 @@ export default function SolutionWorkbench({
   }, [reloadList]);
 
   useEffect(() => {
-    setSelectedComponentId(null);
-    setSelectedInterfaceId(null);
-    setSelectedOperationId(null);
+    setSelection({ kind: "solution" });
+    setSelectedSystemId(null);
     setInspectorCollapsed(false);
     void reloadDesign(selectedSolutionId);
   }, [reloadDesign, selectedSolutionId]);
@@ -172,37 +201,62 @@ export default function SolutionWorkbench({
     [reloadDesign, selectedSolutionId],
   );
 
-  const selectedComponent = useMemo(
-    () => design?.components.find((component) => component.object_id === selectedComponentId) ?? null,
-    [design, selectedComponentId],
-  );
-  const selectedInterface = useMemo(
-    () => selectedComponent?.interfaces.find((ui) => ui.object_id === selectedInterfaceId) ?? null,
-    [selectedComponent, selectedInterfaceId],
-  );
-  const selectedOperation = useMemo(
-    () => selectedInterface?.operations.find((operation) => operation.object_id === selectedOperationId) ?? null,
-    [selectedInterface, selectedOperationId],
-  );
+  const selectedComponent = useMemo(() => {
+    if (!design) return null;
+    if (selection.kind === "component" || selection.kind === "interface" || selection.kind === "operation") {
+      return design.components.find((component) => component.object_id === selection.componentId) ?? null;
+    }
+    return null;
+  }, [design, selection]);
+
+  const selectedInterface = useMemo(() => {
+    if (!selectedComponent) return null;
+    if (selection.kind === "interface" || selection.kind === "operation") {
+      return selectedComponent.interfaces.find((ui) => ui.object_id === selection.interfaceId) ?? null;
+    }
+    return null;
+  }, [selectedComponent, selection]);
+
+  const selectedOperation = useMemo(() => {
+    if (!selectedInterface) return null;
+    if (selection.kind === "operation") {
+      return selectedInterface.operations.find((operation) => operation.object_id === selection.operationId) ?? null;
+    }
+    return null;
+  }, [selectedInterface, selection]);
+
+  const selectedRepository = useMemo(() => {
+    if (!design || selection.kind !== "repository") return null;
+    return design.repositories.find((repository) => repository.object_id === selection.repositoryId) ?? null;
+  }, [design, selection]);
+
+  const selectedDeployment = useMemo(() => {
+    if (!design || selection.kind !== "deployment") return null;
+    return design.deployment_nodes.find((node) => node.object_id === selection.deploymentId) ?? null;
+  }, [design, selection]);
+
+  const selectedTrust = useMemo(() => {
+    if (!design || selection.kind !== "trust") return null;
+    return design.trust_boundaries.find((boundary) => boundary.object_id === selection.trustId) ?? null;
+  }, [design, selection]);
 
   // Trace navigation: reveal the destination solution object inside the design.
   useEffect(() => {
     if (!focus || focus.discipline !== "solution") return;
     if (focus.kind === "solution_boundary") {
-      if (solutions.length === 0) return; // wait for the solution list to load
+      if (solutions.length === 0) return;
       if (solutions.some((solution) => solution.object_id === focus.objectId)) {
         setSelectedSolutionId(focus.objectId);
+        setSelection({ kind: "solution" });
       }
       clearFocus(focus.nonce);
       return;
     }
-    if (!design) return; // wait for the design before deciding
+    if (!design) return;
     const component = design.components.find((item) => item.object_id === focus.objectId);
     if (component) {
-      setView("components");
-      setSelectedComponentId(component.object_id);
-      setSelectedInterfaceId(null);
-      setSelectedOperationId(null);
+      setView("decomposition");
+      setSelection({ kind: "component", componentId: component.object_id });
       setInspectorCollapsed(false);
     } else {
       const owner = design.components.find((item) =>
@@ -218,32 +272,26 @@ export default function SolutionWorkbench({
             candidate.object_id === focus.objectId ||
             candidate.operations.some((operation) => operation.object_id === focus.objectId),
         );
-        setView("components");
-        setSelectedComponentId(owner.object_id);
-        setSelectedInterfaceId(ui?.object_id ?? null);
-        setSelectedOperationId(focus.kind === "interface_operation" ? focus.objectId : null);
+        setView("decomposition");
+        setSelection(
+          focus.kind === "interface_operation"
+            ? { kind: "operation", componentId: owner.object_id, interfaceId: ui?.object_id ?? "", operationId: focus.objectId }
+            : { kind: "interface", componentId: owner.object_id, interfaceId: ui?.object_id ?? "" },
+        );
         setInspectorCollapsed(false);
       } else if (focus.kind === "data_repository") {
-        setView("repositories");
+        setView("decomposition");
+        setSelection({ kind: "repository", repositoryId: focus.objectId });
       } else if (focus.kind === "deployment_node") {
         setView("deployment");
+        setSelection({ kind: "deployment", deploymentId: focus.objectId });
       } else if (focus.kind === "trust_boundary") {
         setView("trust");
+        setSelection({ kind: "trust", trustId: focus.objectId });
       }
     }
     clearFocus(focus.nonce);
   }, [focus, design, solutions, clearFocus]);
-
-  const visibleComponents = useMemo(() => {
-    if (!design) return [];
-    const term = search.trim().toLowerCase();
-    if (!term) return design.components;
-    return design.components.filter((component) =>
-      component.name.toLowerCase().includes(term) ||
-      (component.responsibility ?? "").toLowerCase().includes(term) ||
-      component.interfaces.some((ui) => ui.name.toLowerCase().includes(term)),
-    );
-  }, [design, search]);
 
   function nextComponentPosition() {
     const components = design?.components ?? [];
@@ -251,16 +299,18 @@ export default function SolutionWorkbench({
     return { x: 160 + 40 * components.length, y: 120 + 60 * components.length };
   }
 
-  function handleSelectComponent(componentId: string) {
-    setSelectedComponentId(componentId);
-    setSelectedInterfaceId(null);
-    setSelectedOperationId(null);
+  function selectComponent(componentId: string) {
+    setSelection({ kind: "component", componentId });
     setInspectorCollapsed(false);
   }
 
-  function handleSelectInterface(interfaceId: string) {
-    setSelectedInterfaceId(interfaceId);
-    setSelectedOperationId(null);
+  function selectInterface(componentId: string, interfaceId: string) {
+    setSelection({ kind: "interface", componentId, interfaceId });
+    setInspectorCollapsed(false);
+  }
+
+  function selectOperation(componentId: string, interfaceId: string, operationId: string) {
+    setSelection({ kind: "operation", componentId, interfaceId, operationId });
     setInspectorCollapsed(false);
   }
 
@@ -272,6 +322,7 @@ export default function SolutionWorkbench({
       const created = await createSolution(workspaceId, { state_id: stateId, name, position: { x: 80, y: 80 } });
       setSelectedSolutionId(created.solution.solution_object_id);
       await reloadList();
+      onReloadStates?.();
       return created;
     });
   }
@@ -281,15 +332,32 @@ export default function SolutionWorkbench({
     await run(async () => {
       const created = await createComponent(workspaceId, design.solution.solution_object_id, {
         state_id: stateId,
-        name: "New component",
+        name: `New component ${design.components.length + 1}`,
         position: nextComponentPosition(),
       });
-      const component = created.components.find((item) => item.name === "New component");
-      if (component) setSelectedComponentId(component.object_id);
-      setView("components");
+      setView("decomposition");
       return created;
     });
   }
+
+  const moveOccurrenceTo = useCallback(
+    (occurrenceId: string, position: Point) => {
+      if (!occurrenceId || !mutateActive) return;
+      mutateActive((state) => moveOccurrence(state, occurrenceId, position));
+    },
+    [mutateActive],
+  );
+
+  const changeMembership = useCallback(
+    (action: () => Promise<SolutionDesign>) => {
+      void run(async () => {
+        const next = await action();
+        onReloadStates?.();
+        return next;
+      });
+    },
+    [run, onReloadStates],
+  );
 
   const breadcrumb: BreadcrumbStep[] = useMemo(() => {
     const steps: BreadcrumbStep[] = [];
@@ -297,23 +365,116 @@ export default function SolutionWorkbench({
     if (selectedComponent) steps.push({ id: selectedComponent.object_id, label: selectedComponent.name, kind: "component" });
     if (selectedInterface) steps.push({ id: selectedInterface.object_id, label: selectedInterface.name, kind: "interface" });
     if (selectedOperation) steps.push({ id: selectedOperation.object_id, label: selectedOperation.name, kind: "operation" });
+    if (selectedRepository) steps.push({ id: selectedRepository.object_id, label: selectedRepository.name, kind: "component" });
+    if (selectedDeployment) steps.push({ id: selectedDeployment.object_id, label: selectedDeployment.name, kind: "component" });
+    if (selectedTrust) steps.push({ id: selectedTrust.object_id, label: selectedTrust.name, kind: "component" });
     return steps;
-  }, [design, selectedComponent, selectedInterface, selectedOperation]);
+  }, [design, selectedComponent, selectedInterface, selectedOperation, selectedRepository, selectedDeployment, selectedTrust]);
 
   function handleBreadcrumb(step: BreadcrumbStep) {
-    if (step.kind === "solution") {
-      setSelectedComponentId(null);
-      setSelectedInterfaceId(null);
-      setSelectedOperationId(null);
-    } else if (step.kind === "component") {
-      setSelectedInterfaceId(null);
-      setSelectedOperationId(null);
-    } else if (step.kind === "interface") {
-      setSelectedOperationId(null);
-    }
+    if (!design) return;
+    if (step.id === design.solution.solution_object_id) setSelection({ kind: "solution" });
+    else if (selectedOperation?.object_id === step.id) setSelection({ kind: "interface", componentId: selectedComponent!.object_id, interfaceId: selectedInterface!.object_id });
+    else if (selectedInterface?.object_id === step.id) setSelection({ kind: "component", componentId: selectedComponent!.object_id });
+    else if (selectedComponent?.object_id === step.id) setSelection({ kind: "component", componentId: step.id });
+    else if (selectedRepository?.object_id === step.id) setSelection({ kind: "repository", repositoryId: step.id });
+    else if (selectedDeployment?.object_id === step.id) setSelection({ kind: "deployment", deploymentId: step.id });
+    else if (selectedTrust?.object_id === step.id) setSelection({ kind: "trust", trustId: step.id });
   }
 
-  const showInspector = Boolean(selectedComponent) && !inspectorCollapsed;
+  const tracePanel = (objectId: string) => (
+    <ObjectTracePanel
+      workspaceId={workspaceId}
+      stateId={stateId || null}
+      objectId={objectId}
+      onNavigate={onNavigateTrace}
+    />
+  );
+
+  const showInspector = Boolean(design) && !inspectorCollapsed;
+
+  const toolbarAddMenu = (
+    <div className="studio-menu solution-add-menu">
+      <button
+        type="button"
+        className="studio-add-menu"
+        disabled={!isEditable || busy || !design}
+        aria-expanded={addMenuOpen}
+        onClick={() => setAddMenuOpen((open) => !open)}
+      >
+        + Add object
+      </button>
+      {addMenuOpen && (
+        <div className="studio-menu-panel" role="menu">
+          <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); void handleCreateComponent(); }}>
+            Component<small>Add a component to the solution</small>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!selectedComponent}
+            onClick={() => {
+              setAddMenuOpen(false);
+              if (!selectedComponent) return;
+              void run(() => createInterface(workspaceId, selectedComponent.object_id, {
+                state_id: stateId, name: "New interface", direction: "provided",
+              }));
+            }}
+          >
+            Interface<small>Requires a selected component</small>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!selectedInterface}
+            onClick={() => {
+              setAddMenuOpen(false);
+              if (!selectedInterface) return;
+              void run(() => createOperation(workspaceId, selectedInterface.object_id, {
+                state_id: stateId, name: "New operation", operation_kind: "operation",
+              }));
+            }}
+          >
+            Operation / event<small>Requires a selected interface</small>
+          </button>
+          <hr />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setAddMenuOpen(false);
+              if (!design) return;
+              void run(() => createRepository(workspaceId, design.solution.solution_object_id, { state_id: stateId, name: "New repository" }));
+            }}
+          >
+            Data repository<small>Render inside the decomposition</small>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setAddMenuOpen(false);
+              if (!design) return;
+              void run(() => createDeploymentNode(workspaceId, design.solution.solution_object_id, { state_id: stateId, name: "New deployment node" }));
+            }}
+          >
+            Deployment node<small>Host components at runtime</small>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setAddMenuOpen(false);
+              if (!design) return;
+              void run(() => createTrustBoundary(workspaceId, design.solution.solution_object_id, { state_id: stateId, name: "New trust boundary" }));
+            }}
+          >
+            Trust boundary<small>Group objects by security zone</small>
+          </button>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className={`solution-workbench${showInspector ? " has-panel" : ""}`}>
@@ -334,9 +495,7 @@ export default function SolutionWorkbench({
         <button type="button" className="studio-add-menu" disabled={!isEditable || busy || !stateId} onClick={() => void handleCreateSolution()}>
           + New solution
         </button>
-        <button type="button" className="studio-add-menu" disabled={!isEditable || busy || !design} onClick={() => void handleCreateComponent()}>
-          + New component
-        </button>
+        {design && toolbarAddMenu}
         <span className="solution-toolbar-hint">
           {isEditable ? "Model components, interfaces, operations and their links." : "Current state is read-only. Duplicate it to model changes."}
         </span>
@@ -366,7 +525,7 @@ export default function SolutionWorkbench({
           ))}
         </nav>
 
-        <div className="solution-content">
+        <div className={`solution-content${view === "context" || view === "decomposition" ? " solution-content-canvas" : ""}`}>
           {loading && !design ? (
             <div className="landscape-empty" role="status">Loading solution design…</div>
           ) : !design ? (
@@ -379,103 +538,111 @@ export default function SolutionWorkbench({
           ) : (
             <>
               {view === "context" && (
-                <SolutionContextPanel
+                <SolutionContextView
                   design={design}
-                  systems={systems}
+                  state={activeState}
                   editable={isEditable}
-                  busy={busy}
-                  onSave={(patch) => void run(() => updateSolution(workspaceId, design.solution.solution_object_id, stateId, patch))}
-                  onAddMember={(systemId) => void run(() => addSolutionMember(workspaceId, design.solution.solution_object_id, { state_id: stateId, system_id: systemId }))}
-                  onRemoveMember={(systemId) => void run(() => removeSolutionMember(workspaceId, design.solution.solution_object_id, systemId, stateId))}
+                  selectedSystemId={selectedSystemId}
+                  onSelectSystem={(systemId) => {
+                    setSelectedSystemId(systemId);
+                    setSelection({ kind: "solution" });
+                  }}
+                  onSelectSolution={() => setSelection({ kind: "solution" })}
+                  onMoveSystem={moveOccurrenceTo}
+                  defaultViewport={viewportRef.current[viewportKey]}
+                  onViewportChange={(viewport) => { viewportRef.current[viewportKey] = viewport; }}
                 />
               )}
-
-              {view === "components" && (
-                <div className="solution-components">
-                  {visibleComponents.length === 0 ? (
-                    <p className="architecture-topbar-hint">No components match. Add one to decompose the solution.</p>
-                  ) : (
-                    <ul className="solution-component-grid">
-                      {visibleComponents.map((component) => (
-                        <li key={component.object_id}>
-                          <button
-                            type="button"
-                            className={`solution-component-card${component.object_id === selectedComponentId ? " selected" : ""}`}
-                            onClick={() => handleSelectComponent(component.object_id)}
-                          >
-                            <strong>{component.name}</strong>
-                            {component.component_type && <em>{component.component_type}</em>}
-                            <span>{component.responsibility ?? "No responsibility recorded."}</span>
-                            <small>
-                              <b className="direction-provided">{component.interfaces.filter((ui) => ui.direction === "provided").length} provided</b>
-                              <b className="direction-required">{component.interfaces.filter((ui) => ui.direction === "required").length} required</b>
-                            </small>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-
-              {view === "repositories" && (
-                <SolutionResourcePanel
-                  title="Data repositories"
-                  items={design.repositories.map((repository) => ({
-                    id: repository.object_id,
-                    name: repository.name,
-                    meta: [repository.repository_type, repository.technology, repository.owner].filter(Boolean).join(" · "),
-                  }))}
-                  components={design.components}
-                  links={design.links}
-                  relationshipType="uses_repository"
+              {view === "decomposition" && (
+                <SolutionDecompositionView
+                  design={design}
+                  state={activeState}
                   editable={isEditable}
-                  busy={busy}
-                  onCreate={(name) => void run(() => createRepository(workspaceId, design.solution.solution_object_id, { state_id: stateId, name }))}
-                  onLink={(componentId, targetId) => void run(() => linkComponentRepository(workspaceId, componentId, { state_id: stateId, target_object_id: targetId }))}
+                  selectedComponentId={selectedComponent?.object_id ?? null}
+                  selectedInterfaceId={selectedInterface?.object_id ?? null}
+                  selectedOperationId={selectedOperation?.object_id ?? null}
+                  selectedRepositoryId={selectedRepository?.object_id ?? null}
+                  onSelectComponent={selectComponent}
+                  onSelectInterface={selectInterface}
+                  onSelectOperation={selectOperation}
+                  onSelectRepository={(repositoryId) => { setSelection({ kind: "repository", repositoryId }); setInspectorCollapsed(false); }}
+                  onMoveComponent={(occurrenceId, position) => {
+                    setDesign((current) => current
+                      ? { ...current, components: current.components.map((component) => component.occurrence_id === occurrenceId ? { ...component, position } : component) }
+                      : current);
+                    moveOccurrenceTo(occurrenceId, position);
+                  }}
+                  onConnectInterfaces={(sourceInterfaceId, targetInterfaceId) =>
+                    void run(() => linkInterfaceConnection(workspaceId, sourceInterfaceId, { state_id: stateId, target_object_id: targetInterfaceId }))
+                  }
+                  defaultViewport={viewportRef.current[viewportKey]}
+                  onViewportChange={(viewport) => { viewportRef.current[viewportKey] = viewport; }}
                 />
               )}
-
               {view === "deployment" && (
-                <SolutionResourcePanel
-                  title="Deployment nodes"
-                  items={design.deployment_nodes.map((node) => ({
-                    id: node.object_id,
-                    name: node.name,
-                    meta: [node.environment, node.hosting, node.technology].filter(Boolean).join(" · "),
-                  }))}
-                  components={design.components}
-                  links={design.links}
-                  relationshipType="deployed_on"
-                  editable={isEditable}
-                  busy={busy}
-                  onCreate={(name) => void run(() => createDeploymentNode(workspaceId, design.solution.solution_object_id, { state_id: stateId, name }))}
-                  onLink={(componentId, targetId) => void run(() => linkComponentDeployment(workspaceId, componentId, { state_id: stateId, target_object_id: targetId }))}
-                />
-              )}
-
-              {view === "trust" && (
-                <SolutionTrustPanel
+                <SolutionDeploymentView
                   design={design}
                   editable={isEditable}
-                  busy={busy}
-                  onCreate={(name) => void run(() => createTrustBoundary(workspaceId, design.solution.solution_object_id, { state_id: stateId, name }))}
-                  onLink={(interfaceId, targetId) => void run(() => linkInterfaceTrustBoundary(workspaceId, interfaceId, { state_id: stateId, target_object_id: targetId }))}
+                  selectedDeploymentId={selectedDeployment?.object_id ?? null}
+                  selectedComponentId={selectedComponent?.object_id ?? null}
+                  onSelectDeployment={(deploymentId) => { setSelection({ kind: "deployment", deploymentId }); setInspectorCollapsed(false); }}
+                  onSelectComponent={selectComponent}
+                  onAddDeploymentNode={() => void run(() => createDeploymentNode(workspaceId, design.solution.solution_object_id, { state_id: stateId, name: "New deployment node" }))}
+                  onAssignComponent={(componentId, deploymentId) =>
+                    void run(() => linkComponentDeployment(workspaceId, componentId, { state_id: stateId, target_object_id: deploymentId }))
+                  }
                 />
               )}
-
-              {view === "sequence" && (
-                <SolutionSequenceView solutionName={design.solution.name} components={design.components} />
+              {view === "trust" && (
+                <SolutionTrustView
+                  design={design}
+                  editable={isEditable}
+                  selectedTrustId={selectedTrust?.object_id ?? null}
+                  selectedComponentId={selectedComponent?.object_id ?? null}
+                  onSelectTrust={(trustId) => { setSelection({ kind: "trust", trustId }); setInspectorCollapsed(false); }}
+                  onSelectComponent={selectComponent}
+                  onAddTrustBoundary={() => void run(() => createTrustBoundary(workspaceId, design.solution.solution_object_id, { state_id: stateId, name: "New trust boundary" }))}
+                />
+              )}
+              {view === "interaction" && (
+                <SolutionInteractionView
+                  design={design}
+                  editable={isEditable}
+                  selectedOperationId={selectedOperation?.object_id ?? null}
+                  selectedInterfaceId={selectedInterface?.object_id ?? null}
+                  onSelectOperation={selectOperation}
+                  onSelectInterface={selectInterface}
+                  onAddComponent={() => void handleCreateComponent()}
+                />
               )}
             </>
           )}
         </div>
 
-        {inspectorCollapsed && selectedComponent && (
+        {inspectorCollapsed && design && (
           <button type="button" className="studio-reopen-inspector" onClick={() => setInspectorCollapsed(false)}>Open inspector</button>
         )}
 
-        {!inspectorCollapsed && selectedComponent && selectedInterface && selectedOperation && (
+        {!inspectorCollapsed && design && selection.kind === "solution" && (
+          <SolutionContextEditor
+            design={design}
+            systems={systems}
+            editable={isEditable}
+            stateName={activeState?.name ?? ""}
+            saveStatus={saveStatus}
+            busy={busy}
+            selectedSystemId={selectedSystemId}
+            onSave={(patch) => void run(() => updateSolution(workspaceId, design.solution.solution_object_id, stateId, patch))}
+            onAddMember={(systemId) => changeMembership(() => addSolutionMember(workspaceId, design.solution.solution_object_id, { state_id: stateId, system_id: systemId }))}
+            onRemoveMember={(systemId) => changeMembership(() => removeSolutionMember(workspaceId, design.solution.solution_object_id, systemId, stateId))}
+            onSelectSystem={setSelectedSystemId}
+            onClose={() => setInspectorCollapsed(true)}
+            onCollapse={() => setInspectorCollapsed(true)}
+            trace={tracePanel(design.solution.solution_object_id)}
+          />
+        )}
+
+        {!inspectorCollapsed && design && selection.kind === "operation" && selectedOperation && selectedInterface && selectedComponent && (
           <OperationEditorPanel
             key={selectedOperation.object_id}
             interfaceName={selectedInterface.name}
@@ -489,17 +656,18 @@ export default function SolutionWorkbench({
               if (!window.confirm("Delete this operation?")) return;
               void run(async () => {
                 const next = await deleteOperation(workspaceId, operationId, stateId);
-                setSelectedOperationId(null);
+                setSelection({ kind: "interface", componentId: selectedComponent.object_id, interfaceId: selectedInterface.object_id });
                 return next;
               });
             }}
-            onBack={() => setSelectedOperationId(null)}
-            onClose={() => { setSelectedOperationId(null); setSelectedInterfaceId(null); }}
+            onBack={() => setSelection({ kind: "interface", componentId: selectedComponent.object_id, interfaceId: selectedInterface.object_id })}
+            onClose={() => setInspectorCollapsed(true)}
             onCollapse={() => setInspectorCollapsed(true)}
+            trace={tracePanel(selectedOperation.object_id)}
           />
         )}
 
-        {!inspectorCollapsed && selectedComponent && selectedInterface && !selectedOperation && (
+        {!inspectorCollapsed && design && selection.kind === "interface" && selectedInterface && selectedComponent && (
           <InterfaceEditorPanel
             key={selectedInterface.object_id}
             componentName={selectedComponent.name}
@@ -513,19 +681,21 @@ export default function SolutionWorkbench({
               if (!window.confirm("Delete this interface and its operations?")) return;
               void run(async () => {
                 const next = await deleteInterface(workspaceId, interfaceId, stateId);
-                setSelectedInterfaceId(null);
+                setSelection({ kind: "component", componentId: selectedComponent.object_id });
                 return next;
               });
             }}
-            onSelectOperation={(operationId) => { setSelectedOperationId(operationId); setInspectorCollapsed(false); }}
-            onAddOperation={(draft) => void run(() => createOperation(workspaceId, selectedInterface.object_id, { ...draft, state_id: stateId }))}
-            onBack={() => setSelectedInterfaceId(null)}
-            onClose={() => { setSelectedInterfaceId(null); setSelectedComponentId(null); }}
+            onSelectOperation={(operationId) => selectOperation(selectedComponent.object_id, selectedInterface.object_id, operationId)}
+            onAddOperation={(draft: { name: string; operation_kind: SolutionOperation["operation_kind"] }) =>
+              void run(() => createOperation(workspaceId, selectedInterface.object_id, { ...draft, state_id: stateId }))}
+            onBack={() => setSelection({ kind: "component", componentId: selectedComponent.object_id })}
+            onClose={() => setInspectorCollapsed(true)}
             onCollapse={() => setInspectorCollapsed(true)}
+            trace={tracePanel(selectedInterface.object_id)}
           />
         )}
 
-        {!inspectorCollapsed && selectedComponent && !selectedInterface && (
+        {!inspectorCollapsed && design && selection.kind === "component" && selectedComponent && (
           <ComponentEditorPanel
             key={selectedComponent.object_id}
             component={selectedComponent}
@@ -538,303 +708,102 @@ export default function SolutionWorkbench({
               if (!window.confirm("Delete this component, its interfaces and operations?")) return;
               void run(async () => {
                 const next = await deleteComponent(workspaceId, componentId, stateId);
-                setSelectedComponentId(null);
+                setSelection({ kind: "solution" });
                 return next;
               });
             }}
-            onSelectInterface={(interfaceId) => handleSelectInterface(interfaceId)}
+            onSelectInterface={(interfaceId) => selectInterface(selectedComponent.object_id, interfaceId)}
             onAddInterface={(draft: InterfaceDraft) => void run(() => createInterface(workspaceId, selectedComponent.object_id, {
               ...draft,
               interface_kind: draft.interface_kind || null,
               state_id: stateId,
             }))}
-            onClose={() => setSelectedComponentId(null)}
+            onClose={() => setInspectorCollapsed(true)}
             onCollapse={() => setInspectorCollapsed(true)}
-            trace={(
-              <ObjectTracePanel
-                workspaceId={workspaceId}
-                stateId={stateId || null}
-                objectId={selectedComponent.object_id}
-                onNavigate={onNavigateTrace}
-              />
-            )}
+            trace={tracePanel(selectedComponent.object_id)}
           />
         )}
 
+        {!inspectorCollapsed && design && selection.kind === "repository" && selectedRepository && (
+          <RepositoryEditorPanel
+            key={selectedRepository.object_id}
+            design={design}
+            repository={selectedRepository}
+            editable={isEditable}
+            stateName={activeState?.name ?? ""}
+            saveStatus={saveStatus}
+            busy={busy}
+            onSave={(repositoryId, patch) => void run(() => updateRepository(workspaceId, repositoryId, { ...patch, state_id: stateId }))}
+            onDelete={(repositoryId) => {
+              if (!window.confirm("Delete this repository and its links?")) return;
+              void run(async () => {
+                const next = await deleteRepository(workspaceId, repositoryId, stateId);
+                setSelection({ kind: "solution" });
+                return next;
+              });
+            }}
+            onLinkComponent={(componentId, repositoryId) =>
+              void run(() => linkComponentRepository(workspaceId, componentId, { state_id: stateId, target_object_id: repositoryId }))
+            }
+            onClose={() => setInspectorCollapsed(true)}
+            onCollapse={() => setInspectorCollapsed(true)}
+            trace={tracePanel(selectedRepository.object_id)}
+          />
+        )}
+
+        {!inspectorCollapsed && design && selection.kind === "deployment" && selectedDeployment && (
+          <DeploymentEditorPanel
+            key={selectedDeployment.object_id}
+            design={design}
+            node={selectedDeployment}
+            editable={isEditable}
+            stateName={activeState?.name ?? ""}
+            saveStatus={saveStatus}
+            busy={busy}
+            onSave={(deploymentId, patch) => void run(() => updateDeploymentNode(workspaceId, deploymentId, { ...patch, state_id: stateId }))}
+            onDelete={(deploymentId) => {
+              if (!window.confirm("Delete this deployment node?")) return;
+              void run(async () => {
+                const next = await deleteDeploymentNode(workspaceId, deploymentId, stateId);
+                setSelection({ kind: "solution" });
+                return next;
+              });
+            }}
+            onAssignComponent={(componentId, deploymentId) => void run(() => linkComponentDeployment(workspaceId, componentId, { state_id: stateId, target_object_id: deploymentId }))}
+            onSelectComponent={selectComponent}
+            onClose={() => setInspectorCollapsed(true)}
+            onCollapse={() => setInspectorCollapsed(true)}
+            trace={tracePanel(selectedDeployment.object_id)}
+          />
+        )}
+
+        {!inspectorCollapsed && design && selection.kind === "trust" && selectedTrust && (
+          <TrustBoundaryEditorPanel
+            key={selectedTrust.object_id}
+            design={design}
+            boundary={selectedTrust}
+            editable={isEditable}
+            stateName={activeState?.name ?? ""}
+            saveStatus={saveStatus}
+            busy={busy}
+            onSave={(trustId, patch) => void run(() => updateTrustBoundary(workspaceId, trustId, { ...patch, state_id: stateId }))}
+            onDelete={(trustId) => {
+              if (!window.confirm("Delete this trust boundary?")) return;
+              void run(async () => {
+                const next = await deleteTrustBoundary(workspaceId, trustId, stateId);
+                setSelection({ kind: "solution" });
+                return next;
+              });
+            }}
+            onContain={(sourceObjectId, trustId) => void run(() => linkTrustBoundaryContainment(workspaceId, sourceObjectId, { state_id: stateId, target_object_id: trustId }))}
+            onCross={(interfaceId, trustId) => void run(() => linkInterfaceTrustBoundary(workspaceId, interfaceId, { state_id: stateId, target_object_id: trustId }))}
+            onSelectComponent={selectComponent}
+            onClose={() => setInspectorCollapsed(true)}
+            onCollapse={() => setInspectorCollapsed(true)}
+            trace={tracePanel(selectedTrust.object_id)}
+          />
+        )}
       </div>
-    </div>
-  );
-}
-
-type ContextProps = {
-  design: SolutionDesign;
-  systems: CatalogSystem[];
-  editable: boolean;
-  busy: boolean;
-  onSave: (patch: { name?: string; owner?: string | null; description?: string | null }) => void;
-  onAddMember: (systemId: string) => void;
-  onRemoveMember: (systemId: string) => void;
-};
-
-function SolutionContextPanel({ design, systems, editable, busy, onSave, onAddMember, onRemoveMember }: ContextProps) {
-  const [name, setName] = useState(design.solution.name);
-  const [owner, setOwner] = useState(design.solution.owner ?? "");
-  const [description, setDescription] = useState(design.solution.description ?? "");
-  const [memberToAdd, setMemberToAdd] = useState("");
-
-  useEffect(() => {
-    setName(design.solution.name);
-    setOwner(design.solution.owner ?? "");
-    setDescription(design.solution.description ?? "");
-  }, [design.solution]);
-
-  const memberIds = new Set(design.solution.members.map((member) => member.system_id));
-  const available = systems.filter((system) => !memberIds.has(system.id));
-
-  return (
-    <div className="solution-context">
-      <article className="solution-context-card">
-        <p className="eyebrow">SOLUTION</p>
-        <label>
-          Name
-          <input value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} />
-        </label>
-        <label>
-          Owner
-          <input value={owner} disabled={!editable} placeholder="Optional" onChange={(event) => setOwner(event.target.value)} />
-        </label>
-        <label>
-          Description
-          <textarea value={description} disabled={!editable} onChange={(event) => setDescription(event.target.value)} />
-        </label>
-        {editable && (
-          <button type="button" disabled={busy} onClick={() => onSave({ name, owner, description })}>
-            {busy ? "Saving…" : "Save context"}
-          </button>
-        )}
-      </article>
-
-      <section className="solution-members">
-        <div className="information-section-heading">
-          <strong>Member systems</strong>
-          <span className="item-count">{design.solution.members.length}</span>
-        </div>
-        {design.solution.members.length === 0 ? (
-          <p className="architecture-topbar-hint">No member systems yet.</p>
-        ) : (
-          <ul className="solution-member-list">
-            {design.solution.members.map((member) => (
-              <li key={member.system_id}>
-                <span>{member.name}</span>
-                <small>{member.kind}</small>
-                {editable && (
-                  <button type="button" className="secondary-button" onClick={() => onRemoveMember(member.system_id)}>Remove</button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {editable && (
-          <div className="solution-member-add">
-            <select value={memberToAdd} onChange={(event) => setMemberToAdd(event.target.value)}>
-              <option value="">Add a system…</option>
-              {available.map((system) => (
-                <option key={system.id} value={system.id}>{system.name}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              disabled={busy || !memberToAdd}
-              onClick={() => {
-                onAddMember(memberToAdd);
-                setMemberToAdd("");
-              }}
-            >
-              Add member
-            </button>
-          </div>
-        )}
-
-        {design.solution.external_systems.length > 0 && (
-          <div className="solution-external">
-            <strong>External systems on the canvas</strong>
-            <ul>
-              {design.solution.external_systems.map((system) => (
-                <li key={system.system_id}>{system.name}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-type ResourcePanelProps = {
-  title: string;
-  items: { id: string; name: string; meta: string }[];
-  components: SolutionComponent[];
-  links: SolutionDesign["links"];
-  relationshipType: string;
-  editable: boolean;
-  busy: boolean;
-  onCreate: (name: string) => void;
-  onLink: (componentId: string, targetId: string | null) => void;
-};
-
-function SolutionResourcePanel({
-  title,
-  items,
-  components,
-  links,
-  relationshipType,
-  editable,
-  busy,
-  onCreate,
-  onLink,
-}: ResourcePanelProps) {
-  const [draftName, setDraftName] = useState("");
-  return (
-    <div className="solution-resource">
-      <h3>{title}</h3>
-      {items.length === 0 ? (
-        <p className="architecture-topbar-hint">Nothing recorded yet.</p>
-      ) : (
-        <ul className="solution-resource-list">
-          {items.map((item) => {
-            const connected = links
-              .filter((link) => link.relationship_type === relationshipType && link.target_object_id === item.id)
-              .map((link) => link.source_object_id);
-            return (
-              <li key={item.id}>
-                <div>
-                  <strong>{item.name}</strong>
-                  {item.meta && <small>{item.meta}</small>}
-                </div>
-                <div className="solution-resource-links">
-                  {connected.length > 0 && (
-                    <span className="solution-link-chips">
-                      {connected
-                        .map((componentId) => components.find((component) => component.object_id === componentId)?.name)
-                        .filter(Boolean)
-                        .join(", ")}
-                    </span>
-                  )}
-                  {editable && (
-                    <select
-                      aria-label={`Connect component to ${item.name}`}
-                      defaultValue=""
-                      onChange={(event) => {
-                        if (event.target.value) onLink(event.target.value, item.id);
-                      }}
-                    >
-                      <option value="">Connect component…</option>
-                      {components.map((component) => (
-                        <option key={component.object_id} value={component.object_id}>{component.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {editable && (
-        <div className="solution-resource-add">
-          <input
-            value={draftName}
-            placeholder={`New ${title.toLowerCase().replace(/s$/, "")}`}
-            onChange={(event) => setDraftName(event.target.value)}
-          />
-          <button
-            type="button"
-            disabled={busy || !draftName.trim()}
-            onClick={() => {
-              onCreate(draftName.trim());
-              setDraftName("");
-            }}
-          >
-            Add
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-type TrustPanelProps = {
-  design: SolutionDesign;
-  editable: boolean;
-  busy: boolean;
-  onCreate: (name: string) => void;
-  onLink: (interfaceId: string, targetId: string | null) => void;
-};
-
-function SolutionTrustPanel({ design, editable, busy, onCreate, onLink }: TrustPanelProps) {
-  const [draftName, setDraftName] = useState("");
-  const interfaces = design.components.flatMap((component) => component.interfaces);
-  return (
-    <div className="solution-resource">
-      <h3>Trust boundaries</h3>
-      {design.trust_boundaries.length === 0 ? (
-        <p className="architecture-topbar-hint">Nothing recorded yet.</p>
-      ) : (
-        <ul className="solution-resource-list">
-          {design.trust_boundaries.map((boundary) => {
-            const connected = design.links
-              .filter((link) => link.relationship_type === "crosses" && link.target_object_id === boundary.object_id)
-              .map((link) => link.source_object_id);
-            return (
-              <li key={boundary.object_id}>
-                <div>
-                  <strong>{boundary.name}</strong>
-                  {boundary.security_level && <small>{boundary.security_level}</small>}
-                </div>
-                <div className="solution-resource-links">
-                  {connected.length > 0 && (
-                    <span className="solution-link-chips">
-                      {connected
-                        .map((interfaceId) => interfaces.find((ui) => ui.object_id === interfaceId)?.name)
-                        .filter(Boolean)
-                        .join(", ")}
-                    </span>
-                  )}
-                  {editable && (
-                    <select
-                      aria-label={`Cross interface over ${boundary.name}`}
-                      defaultValue=""
-                      onChange={(event) => {
-                        if (event.target.value) onLink(event.target.value, boundary.object_id);
-                      }}
-                    >
-                      <option value="">Cross interface…</option>
-                      {interfaces.map((ui) => (
-                        <option key={ui.object_id} value={ui.object_id}>{ui.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {editable && (
-        <div className="solution-resource-add">
-          <input value={draftName} placeholder="New trust boundary" onChange={(event) => setDraftName(event.target.value)} />
-          <button
-            type="button"
-            disabled={busy || !draftName.trim()}
-            onClick={() => {
-              onCreate(draftName.trim());
-              setDraftName("");
-            }}
-          >
-            Add
-          </button>
-        </div>
-      )}
     </div>
   );
 }

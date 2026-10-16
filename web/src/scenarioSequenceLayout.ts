@@ -164,7 +164,7 @@ export function layoutSequence(
         toX,
         y: y + (self ? 14 : 22),
         self,
-        dashed: isContract && isResponsePhase(item.phase),
+        dashed: isResponsePhase(item.phase),
         label: isContract ? `${contractLabel(index, item.contractId)} · ${phaseLabel}` : item.label?.trim() || "Message",
         detail: isContract ? item.label?.trim() || null : null,
         contractId: isContract ? item.contractId ?? null : null,

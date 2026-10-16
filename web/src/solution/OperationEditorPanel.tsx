@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
+import UnifiedInspector from "../components/inspector/UnifiedInspector";
 import type { SolutionOperation, SolutionOperationKind } from "./solutionModel";
 
 type Props = {
@@ -15,6 +16,14 @@ type Props = {
   onBack: () => void;
   onClose: () => void;
   onCollapse: () => void;
+  trace?: ReactNode;
+};
+
+const KIND_LABELS: Record<SolutionOperationKind, string> = {
+  operation: "Operation",
+  event: "Event",
+  command: "Command",
+  query: "Query",
 };
 
 export default function OperationEditorPanel({
@@ -29,6 +38,7 @@ export default function OperationEditorPanel({
   onBack,
   onClose,
   onCollapse,
+  trace,
 }: Props) {
   const [name, setName] = useState(operation.name);
   const [description, setDescription] = useState(operation.description ?? "");
@@ -36,21 +46,9 @@ export default function OperationEditorPanel({
 
   const dirty = name !== operation.name || description !== (operation.description ?? "") || kind !== operation.operation_kind;
 
-  return (
-    <aside className="architecture-relationship-panel solution-panel" aria-label="Operation details">
-      <header>
-        <div>
-          <button type="button" className="solution-back-button" onClick={onBack}>‹ {interfaceName}</button>
-          <p className="eyebrow">OPERATION / EVENT</p>
-          <h3>{operation.name}</h3>
-        </div>
-        <div className="studio-inspector-actions">
-          <button type="button" className="secondary-button" aria-label="Collapse operation inspector" onClick={onCollapse}>›</button>
-          <button type="button" className="secondary-button" aria-label="Close operation details" onClick={onClose}>✕</button>
-        </div>
-      </header>
-      <p className="studio-inspector-state">{stateName} · {editable ? "Editable" : "Read-only"} <span>{saveStatus === "idle" ? "" : saveStatus}</span></p>
-
+  const properties = (
+    <>
+      <button type="button" className="solution-back-button" onClick={onBack}>‹ {interfaceName}</button>
       <label>
         Name
         <input value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} />
@@ -82,6 +80,27 @@ export default function OperationEditorPanel({
           </button>
         </div>
       )}
-    </aside>
+    </>
+  );
+
+  return (
+    <UnifiedInspector
+      ariaLabel="Operation details"
+      eyebrow="OPERATION / EVENT"
+      title={operation.name}
+      identifier={operation.object_id}
+      stateName={stateName}
+      status={`${KIND_LABELS[operation.operation_kind]} · ${editable ? "Editable" : "Read-only"}`}
+      saveStatus={saveStatus}
+      collapseLabel="Collapse operation inspector"
+      closeLabel="Close operation details"
+      onCollapse={onCollapse}
+      onClose={onClose}
+      panels={[
+        { id: "properties", label: "Properties", content: properties },
+        { id: "relationships", label: "Relationships", content: <p className="architecture-topbar-hint">Operations connect an interface to its callers and events.</p> },
+        { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
+      ]}
+    />
   );
 }

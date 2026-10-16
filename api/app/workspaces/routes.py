@@ -12,6 +12,7 @@ from app.auth.dependencies import (
     require_csrf,
 )
 from app.db import get_session
+from app.demo import PRESETS, generate_demo, reset_demo
 from app.models import AuthSession, Tenant, User, Workspace
 from app.workspaces.schemas import (
     WorkspaceCreate,
@@ -90,6 +91,26 @@ def _ensure_workspace_entity(
     return ws
 
 
+def _workspace_response(
+    db: Session, tenant: Tenant, ws: Workspace, *, is_active: bool
+) -> WorkspaceResponse:
+    s_count, c_count, sc_count = get_workspace_counts(db, tenant.id)
+    return WorkspaceResponse(
+        id=tenant.id,
+        name=tenant.name,
+        description=tenant.description,
+        disciplines=ws.disciplines,
+        created_at=tenant.created_at,
+        is_active=is_active,
+        systems_count=s_count,
+        contracts_count=c_count,
+        scenarios_count=sc_count,
+        demo_preset=ws.demo_preset,
+        demo_version=ws.demo_version,
+        demo_generated_at=ws.demo_generated_at,
+    )
+
+
 @router.get("", response_model=list[WorkspaceResponse])
 def list_workspaces(
     user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
@@ -113,20 +134,7 @@ def list_workspaces(
     results: list[WorkspaceResponse] = []
     for t in tenants:
         ws = _ensure_workspace_entity(db, t)
-        s_count, c_count, sc_count = get_workspace_counts(db, t.id)
-        results.append(
-            WorkspaceResponse(
-                id=t.id,
-                name=t.name,
-                description=t.description,
-                disciplines=ws.disciplines,
-                created_at=t.created_at,
-                is_active=(t.id == user.tenant_id),
-                systems_count=s_count,
-                contracts_count=c_count,
-                scenarios_count=sc_count,
-            )
-        )
+        results.append(_workspace_response(db, t, ws, is_active=(t.id == user.tenant_id)))
     db.commit()
     return results
 
@@ -162,10 +170,15 @@ def create_workspace(
     db.add(new_tenant)
     db.flush()
 
-    new_ws = _ensure_workspace_entity(db, new_tenant, disciplines=payload.disciplines)
+    disciplines = payload.disciplines
+    if payload.demo_preset is not None:
+        disciplines = list(PRESETS[payload.demo_preset])
+    new_ws = _ensure_workspace_entity(db, new_tenant, disciplines=disciplines)
 
     if payload.seed_demo_data:
         seed_demo_data_for_tenant(db, new_tenant.id)
+    if payload.demo_preset is not None:
+        generate_demo(db, new_ws, payload.demo_preset)
 
     # Switch session to new workspace
     auth_session.active_tenant_id = new_tenant.id
@@ -173,18 +186,7 @@ def create_workspace(
     db.refresh(new_tenant)
     db.refresh(new_ws)
 
-    s_count, c_count, sc_count = get_workspace_counts(db, new_tenant.id)
-    return WorkspaceResponse(
-        id=new_tenant.id,
-        name=new_tenant.name,
-        description=new_tenant.description,
-        disciplines=new_ws.disciplines,
-        created_at=new_tenant.created_at,
-        is_active=True,
-        systems_count=s_count,
-        contracts_count=c_count,
-        scenarios_count=sc_count,
-    )
+    return _workspace_response(db, new_tenant, new_ws, is_active=True)
 
 
 @router.patch("/{workspace_id}", response_model=WorkspaceResponse)
@@ -230,18 +232,7 @@ def update_workspace(
     db.refresh(ws)
     db.refresh(tenant)
 
-    s_count, c_count, sc_count = get_workspace_counts(db, tenant.id)
-    return WorkspaceResponse(
-        id=tenant.id,
-        name=tenant.name,
-        description=tenant.description,
-        disciplines=ws.disciplines,
-        created_at=tenant.created_at,
-        is_active=(tenant.id == user.tenant_id),
-        systems_count=s_count,
-        contracts_count=c_count,
-        scenarios_count=sc_count,
-    )
+    return _workspace_response(db, tenant, ws, is_active=(tenant.id == user.tenant_id))
 
 
 @router.post("/{workspace_id}/switch", response_model=WorkspaceResponse)
@@ -258,18 +249,32 @@ def switch_workspace(
     auth_session.active_tenant_id = tenant.id
     db.commit()
 
-    s_count, c_count, sc_count = get_workspace_counts(db, tenant.id)
-    return WorkspaceResponse(
-        id=tenant.id,
-        name=tenant.name,
-        description=tenant.description,
-        disciplines=ws.disciplines,
-        created_at=tenant.created_at,
-        is_active=True,
-        systems_count=s_count,
-        contracts_count=c_count,
-        scenarios_count=sc_count,
-    )
+    return _workspace_response(db, tenant, ws, is_active=True)
+
+
+@router.post("/{workspace_id}/demo/reset", response_model=WorkspaceResponse)
+def reset_demo_endpoint(
+    workspace_id: UUID,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> WorkspaceResponse:
+    require_csrf(request, auth_session)
+    tenant = _user_can_access_workspace(db, user, workspace_id)
+    ws = _ensure_workspace_entity(db, tenant)
+    if not ws.demo_preset:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This workspace is not a demo workspace",
+        )
+    try:
+        reset_demo(db, ws)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+    db.commit()
+    db.refresh(ws)
+    return _workspace_response(db, tenant, ws, is_active=(tenant.id == user.tenant_id))
 
 
 @router.post(
@@ -327,18 +332,7 @@ def fork_workspace_endpoint(
     db.refresh(new_tenant)
     db.refresh(fork_ws)
 
-    s_count, c_count, sc_count = get_workspace_counts(db, new_tenant.id)
-    return WorkspaceResponse(
-        id=new_tenant.id,
-        name=new_tenant.name,
-        description=new_tenant.description,
-        disciplines=fork_ws.disciplines,
-        created_at=new_tenant.created_at,
-        is_active=True,
-        systems_count=s_count,
-        contracts_count=c_count,
-        scenarios_count=sc_count,
-    )
+    return _workspace_response(db, new_tenant, fork_ws, is_active=True)
 
 
 @router.get("/{workspace_id}/export")
@@ -397,18 +391,7 @@ def import_workspace_endpoint(
     db.refresh(new_tenant)
     db.refresh(imported_ws)
 
-    s_count, c_count, sc_count = get_workspace_counts(db, new_tenant.id)
-    return WorkspaceResponse(
-        id=new_tenant.id,
-        name=new_tenant.name,
-        description=new_tenant.description,
-        disciplines=imported_ws.disciplines,
-        created_at=new_tenant.created_at,
-        is_active=True,
-        systems_count=s_count,
-        contracts_count=c_count,
-        scenarios_count=sc_count,
-    )
+    return _workspace_response(db, new_tenant, imported_ws, is_active=True)
 
 
 @router.delete("/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)

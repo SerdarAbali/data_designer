@@ -450,3 +450,118 @@ export function linkInterfaceTrustBoundary(
     }),
   );
 }
+
+export function linkInterfaceConnection(
+  workspaceId: string,
+  interfaceId: string,
+  body: { state_id: string; target_object_id: string | null },
+): Promise<SolutionDesign> {
+  return run("link interface connection", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/interfaces/${interfaceId}/connection`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export function linkTrustBoundaryContainment(
+  workspaceId: string,
+  sourceObjectId: string,
+  body: { state_id: string; target_object_id: string | null },
+): Promise<SolutionDesign> {
+  return run("link trust containment", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/containment/${sourceObjectId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export function updateRepository(
+  workspaceId: string,
+  repositoryId: string,
+  patch: {
+    state_id: string;
+    name?: string;
+    description?: string | null;
+    owner?: string | null;
+    repository_type?: string | null;
+    technology?: string | null;
+  },
+): Promise<SolutionDesign> {
+  return run("update repository", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/repositories/${repositoryId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export function deleteRepository(
+  workspaceId: string,
+  repositoryId: string,
+  stateId: string,
+): Promise<SolutionDesign> {
+  return run("delete repository", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/repositories/${repositoryId}?state_id=${stateId}`, {
+      method: "DELETE",
+    }),
+  );
+}
+
+export function updateDeploymentNode(
+  workspaceId: string,
+  deploymentId: string,
+  patch: {
+    state_id: string;
+    name?: string;
+    description?: string | null;
+    technology?: string | null;
+    environment?: string | null;
+    hosting?: string | null;
+  },
+): Promise<SolutionDesign> {
+  return run("update deployment node", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/deployment-nodes/${deploymentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export function deleteDeploymentNode(
+  workspaceId: string,
+  deploymentId: string,
+  stateId: string,
+): Promise<SolutionDesign> {
+  return run("delete deployment node", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/deployment-nodes/${deploymentId}?state_id=${stateId}`, {
+      method: "DELETE",
+    }),
+  );
+}
+
+export function updateTrustBoundary(
+  workspaceId: string,
+  trustId: string,
+  patch: { state_id: string; name?: string; description?: string | null; security_level?: string | null },
+): Promise<SolutionDesign> {
+  return run("update trust boundary", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/trust-boundaries/${trustId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export function deleteTrustBoundary(
+  workspaceId: string,
+  trustId: string,
+  stateId: string,
+): Promise<SolutionDesign> {
+  return run("delete trust boundary", () =>
+    api<SolutionDesign>(`${base(workspaceId)}/trust-boundaries/${trustId}?state_id=${stateId}`, {
+      method: "DELETE",
+    }),
+  );
+}

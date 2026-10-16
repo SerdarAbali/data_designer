@@ -28,6 +28,12 @@ class WorkspaceResponse(BaseModel):
     systems_count: int = 0
     contracts_count: int = 0
     scenarios_count: int = 0
+    demo_preset: str | None = None
+    demo_version: str | None = None
+    demo_generated_at: datetime | None = None
+
+
+DemoPreset = Literal["full", "solution_integration", "integration_only"]
 
 
 class WorkspaceCreate(BaseModel):
@@ -35,6 +41,7 @@ class WorkspaceCreate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     disciplines: Disciplines = Field(default_factory=lambda: list(DEFAULT_DISCIPLINES))
     seed_demo_data: bool = False
+    demo_preset: DemoPreset | None = None
 
 
 class WorkspaceUpdate(BaseModel):

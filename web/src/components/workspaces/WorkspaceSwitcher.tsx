@@ -1,5 +1,5 @@
 import React from "react";
-import NewWorkspaceModal from "./NewWorkspaceModal";
+import NewWorkspaceModal, { type DemoPreset } from "./NewWorkspaceModal";
 import WorkspaceDisciplinesModal from "./WorkspaceDisciplinesModal";
 import type { ArchitectureDiscipline, WorkspaceInfo } from "../../architectureTypes";
 
@@ -114,7 +114,7 @@ export default function WorkspaceSwitcher({
   async function handleCreate(
     name: string,
     description: string,
-    seedDemoData: boolean,
+    demoPreset: DemoPreset | null,
     disciplines: ArchitectureDiscipline[],
   ) {
     setCreating(true);
@@ -126,7 +126,8 @@ export default function WorkspaceSwitcher({
         body: JSON.stringify({
           name,
           description: description || null,
-          seed_demo_data: seedDemoData,
+          seed_demo_data: false,
+          demo_preset: demoPreset,
           disciplines,
         }),
       });
@@ -136,6 +137,23 @@ export default function WorkspaceSwitcher({
       await onSwitch();
     } finally {
       setCreating(false);
+      onTransitionChange?.(false);
+    }
+  }
+
+  async function handleResetDemo(workspaceId: string) {
+    setSwitching(workspaceId);
+    onTransitionChange?.(true);
+    try {
+      if (beforeSwitch && !await beforeSwitch()) return;
+      await apiWs<WorkspaceInfo>(`/api/workspaces/${workspaceId}/demo/reset`, csrfToken, { method: "POST" });
+      await loadWorkspaces();
+      if (detailsRef.current) detailsRef.current.open = false;
+      await onSwitch();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Reset demo failed");
+    } finally {
+      setSwitching(null);
       onTransitionChange?.(false);
     }
   }
@@ -225,7 +243,10 @@ export default function WorkspaceSwitcher({
         <summary aria-label="Switch workspace" className="ws-switcher-trigger">
           <span className="ws-switcher-icon" aria-hidden="true">⊞</span>
           <span className="ws-switcher-label">
-            <span className="ws-switcher-name">{active.name}</span>
+            <span className="ws-switcher-name">
+              {active.name}
+              {activeWorkspace?.demo_preset && <span className="ws-demo-badge">Demo</span>}
+            </span>
             <small>
               {active.systems_count}s · {active.contracts_count}c · {active.scenarios_count}sc
             </small>
@@ -280,7 +301,10 @@ export default function WorkspaceSwitcher({
                   >
                     <span className="ws-active-dot" aria-hidden="true">{ws.is_active ? "●" : "○"}</span>
                     <span className="ws-row-info">
-                      <span className="ws-row-name">{ws.name}</span>
+                      <span className="ws-row-name">
+                        {ws.name}
+                        {ws.demo_preset && <span className="ws-demo-badge">Demo</span>}
+                      </span>
                       <small>{ws.systems_count}s · {ws.contracts_count}c · {ws.scenarios_count}sc</small>
                     </span>
                     {switching === ws.id && <span className="ws-switching-spinner" aria-hidden="true">…</span>}
@@ -297,6 +321,16 @@ export default function WorkspaceSwitcher({
                     >
                       ⚙ Settings
                     </button>
+                    {ws.demo_preset && (
+                      <button
+                        type="button"
+                        className="ws-action-btn"
+                        title="Reset demo content to the selected preset"
+                        onClick={() => void handleResetDemo(ws.id)}
+                      >
+                        ↺ Reset demo
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="ws-action-btn"

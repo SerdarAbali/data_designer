@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
+import UnifiedInspector from "../components/inspector/UnifiedInspector";
 import type {
   SolutionDirection,
   SolutionInterface,
@@ -34,6 +35,7 @@ type Props = {
   onBack: () => void;
   onClose: () => void;
   onCollapse: () => void;
+  trace?: ReactNode;
 };
 
 const EMPTY_DRAFT: OperationDraft = { name: "", operation_kind: "operation" };
@@ -52,6 +54,7 @@ export default function InterfaceEditorPanel({
   onBack,
   onClose,
   onCollapse,
+  trace,
 }: Props) {
   const [name, setName] = useState(interfaceDetail.name);
   const [description, setDescription] = useState(interfaceDetail.description ?? "");
@@ -76,21 +79,9 @@ export default function InterfaceEditorPanel({
     setDraft(EMPTY_DRAFT);
   }
 
-  return (
-    <aside className="architecture-relationship-panel solution-panel" aria-label="Interface details">
-      <header>
-        <div>
-          <button type="button" className="solution-back-button" onClick={onBack}>‹ {componentName}</button>
-          <p className="eyebrow">INTERFACE</p>
-          <h3>{interfaceDetail.name}</h3>
-        </div>
-        <div className="studio-inspector-actions">
-          <button type="button" className="secondary-button" aria-label="Collapse interface inspector" onClick={onCollapse}>›</button>
-          <button type="button" className="secondary-button" aria-label="Close interface details" onClick={onClose}>✕</button>
-        </div>
-      </header>
-      <p className="studio-inspector-state">{stateName} · {editable ? "Editable" : "Read-only"} <span>{saveStatus === "idle" ? "" : saveStatus}</span></p>
-
+  const properties = (
+    <>
+      <button type="button" className="solution-back-button" onClick={onBack}>‹ {componentName}</button>
       <label>
         Name
         <input value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} />
@@ -143,50 +134,74 @@ export default function InterfaceEditorPanel({
           </button>
         </div>
       )}
+    </>
+  );
 
-      <section className="solution-operations-section">
-        <div className="information-section-heading">
-          <strong>Operations &amp; events</strong>
-          <span className="item-count">{interfaceDetail.operations.length}</span>
-        </div>
-        {interfaceDetail.operations.length === 0 ? (
-          <p className="architecture-topbar-hint">No operations yet.</p>
-        ) : (
-          <ul className="solution-operation-list">
-            {interfaceDetail.operations.map((operation) => (
-              <li key={operation.object_id}>
-                <button type="button" onClick={() => onSelectOperation(operation.object_id)}>
-                  <span>{operation.name}</span>
-                  <small>{operation.operation_kind}</small>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+  const relationships = (
+    <section className="solution-operations-section">
+      <div className="information-section-heading">
+        <strong>Operations &amp; events</strong>
+        <span className="item-count">{interfaceDetail.operations.length}</span>
+      </div>
+      {interfaceDetail.operations.length === 0 ? (
+        <p className="architecture-topbar-hint">No operations yet.</p>
+      ) : (
+        <ul className="solution-operation-list">
+          {interfaceDetail.operations.map((operation) => (
+            <li key={operation.object_id}>
+              <button type="button" onClick={() => onSelectOperation(operation.object_id)}>
+                <span>{operation.name}</span>
+                <small>{operation.operation_kind}</small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
-        {editable && (
-          <form className="solution-operation-form" onSubmit={submitOperation}>
-            <p className="studio-menu-caption">New operation or event</p>
-            <label>
-              Name
-              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-            </label>
-            <label>
-              Kind
-              <select
-                value={draft.operation_kind}
-                onChange={(event) => setDraft({ ...draft, operation_kind: event.target.value as SolutionOperationKind })}
-              >
-                <option value="operation">Operation</option>
-                <option value="event">Event</option>
-                <option value="command">Command</option>
-                <option value="query">Query</option>
-              </select>
-            </label>
-            <button type="submit" disabled={busy || !draft.name.trim()}>Add operation</button>
-          </form>
-        )}
-      </section>
-    </aside>
+      {editable && (
+        <form className="solution-operation-form" onSubmit={submitOperation}>
+          <p className="studio-menu-caption">New operation or event</p>
+          <label>
+            Name
+            <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+          </label>
+          <label>
+            Kind
+            <select
+              value={draft.operation_kind}
+              onChange={(event) => setDraft({ ...draft, operation_kind: event.target.value as SolutionOperationKind })}
+            >
+              <option value="operation">Operation</option>
+              <option value="event">Event</option>
+              <option value="command">Command</option>
+              <option value="query">Query</option>
+            </select>
+          </label>
+          <button type="submit" disabled={busy || !draft.name.trim()}>Add operation</button>
+        </form>
+      )}
+    </section>
+  );
+
+  return (
+    <UnifiedInspector
+      ariaLabel="Interface details"
+      eyebrow="INTERFACE"
+      title={interfaceDetail.name}
+      identifier={interfaceDetail.object_id}
+      stateName={stateName}
+      status={editable ? "Editable" : "Read-only"}
+      saveStatus={saveStatus}
+      collapseLabel="Collapse interface inspector"
+      closeLabel="Close interface details"
+      onCollapse={onCollapse}
+      onClose={onClose}
+      defaultTab="relationships"
+      panels={[
+        { id: "properties", label: "Properties", content: properties },
+        { id: "relationships", label: "Relationships", count: interfaceDetail.operations.length, content: relationships },
+        { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
+      ]}
+    />
   );
 }

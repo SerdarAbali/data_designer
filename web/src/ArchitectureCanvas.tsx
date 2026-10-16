@@ -796,6 +796,9 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
           editable={editable}
           saveStatus={saveStatus}
           search={search}
+          onAdoptState={adoptState}
+          mutateActive={mutateActive}
+          onReloadStates={() => void load()}
           onOpenCatalog={onOpenCatalog}
           onNavigateTrace={handleNavigateTrace}
         />

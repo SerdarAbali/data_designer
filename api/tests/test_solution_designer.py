@@ -472,6 +472,128 @@ def test_solution_requires_enabled_discipline(client):
     assert "not enabled" in response.json()["detail"].lower()
 
 
+def test_solution_interface_connection_link(client):
+    test_client, _ = client
+    headers = csrf_headers(test_client)
+    workspace, current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+    state_id = candidate["id"]
+
+    design = _create_solution(test_client, headers, workspace_id, state_id, {"name": "Platform"})
+    solution_id = design["solution"]["solution_object_id"]
+    created = _create_component(
+        test_client, headers, workspace_id, solution_id, state_id, "Consumer"
+    )
+    consumer_id = _component_by_name(created, "Consumer")["object_id"]
+    created = _create_component(
+        test_client, headers, workspace_id, solution_id, state_id, "Provider"
+    )
+    provider_id = _component_by_name(created, "Provider")["object_id"]
+
+    required = test_client.post(
+        f"{_discipline(workspace_id)}/components/{consumer_id}/interfaces",
+        json={"state_id": state_id, "name": "Ledger Client", "direction": "required"},
+        headers=headers,
+    )
+    required_id = _component_by_name(required.json(), "Consumer")["interfaces"][0]["object_id"]
+    provided = test_client.post(
+        f"{_discipline(workspace_id)}/components/{provider_id}/interfaces",
+        json={"state_id": state_id, "name": "Ledger API", "direction": "provided"},
+        headers=headers,
+    )
+    provided_id = _component_by_name(provided.json(), "Provider")["interfaces"][0]["object_id"]
+
+    linked = test_client.put(
+        f"{_discipline(workspace_id)}/interfaces/{required_id}/connection",
+        json={"state_id": state_id, "target_object_id": provided_id},
+        headers=headers,
+    )
+    assert linked.status_code == 200, linked.text
+    assert (required_id, provided_id) in {
+        (link["source_object_id"], link["target_object_id"]) for link in linked.json()["links"]
+    }
+
+    # A provided interface cannot be the source of a connection.
+    rejected = test_client.put(
+        f"{_discipline(workspace_id)}/interfaces/{provided_id}/connection",
+        json={"state_id": state_id, "target_object_id": required_id},
+        headers=headers,
+    )
+    assert rejected.status_code == 422
+
+    # Candidate-only connections are invisible to Current.
+    current_design = test_client.get(
+        f"{_solution(workspace_id, solution_id)}/design",
+        params={"state_id": current["id"]},
+    ).json()
+    assert current_design["links"] == []
+
+    cleared = test_client.put(
+        f"{_discipline(workspace_id)}/interfaces/{required_id}/connection",
+        json={"state_id": state_id, "target_object_id": None},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert (required_id, provided_id) not in {
+        (link["source_object_id"], link["target_object_id"]) for link in cleared.json()["links"]
+    }
+
+
+def test_solution_trust_boundary_containment(client):
+    test_client, _ = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+    state_id = candidate["id"]
+
+    design = _create_solution(test_client, headers, workspace_id, state_id, {"name": "Platform"})
+    solution_id = design["solution"]["solution_object_id"]
+    created = _create_component(test_client, headers, workspace_id, solution_id, state_id, "API")
+    component_id = _component_by_name(created, "API")["object_id"]
+    system_id = test_client.post(
+        "/api/catalog/systems", json={"name": "Core Banking"}, headers=headers
+    ).json()["id"]
+    trust = test_client.post(
+        f"{_solution(workspace_id, solution_id)}/trust-boundaries",
+        json={"state_id": state_id, "name": "Internal Zone", "security_level": "private"},
+        headers=headers,
+    )
+    trust_id = trust.json()["trust_boundaries"][0]["object_id"]
+
+    contained_component = test_client.put(
+        f"{_discipline(workspace_id)}/containment/{component_id}",
+        json={"state_id": state_id, "target_object_id": trust_id},
+        headers=headers,
+    )
+    assert contained_component.status_code == 200, contained_component.text
+    assert (component_id, trust_id) in {
+        (link["source_object_id"], link["target_object_id"])
+        for link in contained_component.json()["links"]
+    }
+
+    contained_system = test_client.put(
+        f"{_discipline(workspace_id)}/containment/{system_id}",
+        json={"state_id": state_id, "target_object_id": trust_id},
+        headers=headers,
+    )
+    assert contained_system.status_code == 200, contained_system.text
+    assert (system_id, trust_id) in {
+        (link["source_object_id"], link["target_object_id"])
+        for link in contained_system.json()["links"]
+    }
+
+    uncontained = test_client.put(
+        f"{_discipline(workspace_id)}/containment/{component_id}",
+        json={"state_id": state_id, "target_object_id": None},
+        headers=headers,
+    )
+    assert uncontained.status_code == 200
+    assert (component_id, trust_id) not in {
+        (link["source_object_id"], link["target_object_id"])
+        for link in uncontained.json()["links"]
+    }
+
+
 def test_solution_demo_fixture_shape():
     demo = json.loads(DEMO_PATH.read_text())
     assert demo["solution"]["name"]

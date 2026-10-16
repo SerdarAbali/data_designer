@@ -105,7 +105,9 @@ TRUST_KIND = "trust_boundary"
 USES_REPOSITORY = "uses_repository"
 DEPLOYED_ON = "deployed_on"
 CROSSES = "crosses"
-LINK_TYPES = (USES_REPOSITORY, DEPLOYED_ON, CROSSES)
+CONNECTS_TO = "connects_to"
+CONTAINED_IN = "contained_in"
+LINK_TYPES = (USES_REPOSITORY, DEPLOYED_ON, CROSSES, CONNECTS_TO, CONTAINED_IN)
 
 COMPONENT_FIELDS = ("name", "description", "responsibility", "component_type", "technology")
 BOUNDARY_FIELDS = ("name", "description", "owner")
@@ -1927,4 +1929,94 @@ def link_interface_trust_boundary(
     db.commit()
     db.refresh(state)
     boundary = _boundary_for_interface(db, workspace, interface)
+    return _build_design(db, workspace, state, boundary)
+
+
+@router.put(
+    "/interfaces/{interface_object_id}/connection", response_model=SolutionDesignResponse
+)
+def link_interface_connection(
+    workspace_id: UUID,
+    interface_object_id: UUID,
+    payload: SolutionLinkRequest,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> SolutionDesignResponse:
+    """Connect a required interface to the provided interface that satisfies it."""
+    require_csrf(request, auth_session)
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_solution(workspace)
+    interface = _get_interface(db, workspace, interface_object_id)
+    state = _get_state(db, workspace, payload.state_id)
+    _assert_writable(state)
+    if interface.direction != "required":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Only required interfaces can connect to a provided interface",
+        )
+    if payload.target_object_id is not None:
+        target = _get_interface(db, workspace, payload.target_object_id)
+        if target.direction != "provided":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Interface connections must target a provided interface",
+            )
+    _replace_link(db, workspace, state, interface_object_id, CONNECTS_TO, payload.target_object_id)
+    db.commit()
+    db.refresh(state)
+    boundary = _boundary_for_interface(db, workspace, interface)
+    return _build_design(db, workspace, state, boundary)
+
+
+@router.put("/containment/{source_object_id}", response_model=SolutionDesignResponse)
+def link_trust_boundary_containment(
+    workspace_id: UUID,
+    source_object_id: UUID,
+    payload: SolutionLinkRequest,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> SolutionDesignResponse:
+    """Place a component or catalog system inside a trust boundary."""
+    require_csrf(request, auth_session)
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_solution(workspace)
+    state = _get_state(db, workspace, payload.state_id)
+    _assert_writable(state)
+    component = db.scalar(
+        select(SolutionComponent).where(
+            SolutionComponent.object_id == source_object_id,
+            SolutionComponent.tenant_id == workspace.tenant_id,
+        )
+    )
+    if component is not None:
+        boundary = _boundary_for_component(db, workspace, component)
+    else:
+        system = db.get(CatalogSystem, source_object_id)
+        if (
+            system is None
+            or system.deleted_at is not None
+            or system.tenant_id != workspace.tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Contained object not found",
+            )
+        # A catalog system is not a solution child; resolve the boundary from the
+        # trust boundary it is being contained in.
+        if payload.target_object_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A trust boundary is required to contain a system",
+            )
+        trust = _get_trust(db, workspace, payload.target_object_id)
+        boundary = _get_boundary(db, workspace, trust.solution_object_id)
+    if payload.target_object_id is not None:
+        _get_trust(db, workspace, payload.target_object_id)
+    _replace_link(db, workspace, state, source_object_id, CONTAINED_IN, payload.target_object_id)
+    db.commit()
+    db.refresh(state)
     return _build_design(db, workspace, state, boundary)

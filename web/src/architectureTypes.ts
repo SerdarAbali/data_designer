@@ -126,4 +126,7 @@ export type WorkspaceInfo = {
   systems_count: number;
   contracts_count: number;
   scenarios_count: number;
+  demo_preset?: string | null;
+  demo_version?: string | null;
+  demo_generated_at?: string | null;
 };
