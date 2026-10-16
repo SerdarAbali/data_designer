@@ -76,6 +76,7 @@ class HelperChangeSet(Base):
     proposed_objects: Mapped[list] = mapped_column(json_type, nullable=False, default=list)
     expected_traceability: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
     validation_summary: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
+    unresolved_details: Mapped[list] = mapped_column(json_type, nullable=False, default=list)
     proposal_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     proposed_by: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -143,6 +144,7 @@ class HelperChangeOperation(Base):
     post_fingerprint: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
     undo_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     undo_conflict: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
+    resolution_state: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

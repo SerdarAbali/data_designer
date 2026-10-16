@@ -81,6 +81,11 @@
   font-size: 0.8rem;
 }
 
+.assistant-current-notice {
+  border-left: 3px solid var(--color-draft);
+  background: var(--color-surface-muted);
+}
+
 .assistant-status {
   font-size: 0.8rem;
   color: var(--color-muted);
@@ -230,4 +235,131 @@
   .assistant-launcher {
     transition: none;
   }
+}
+
+/* Proposal panel */
+.proposal-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--color-surface-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.proposal-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proposal-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.proposal-status {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-draft);
+}
+
+.proposal-status[data-status="validated"] {
+  color: var(--color-healthy);
+}
+
+.proposal-status[data-status="validation_failed"],
+.proposal-status[data-status="stale"] {
+  color: var(--color-attention);
+}
+
+.proposal-summary {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.proposal-meta {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--color-muted);
+}
+
+.proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proposal-ready[data-ready="true"] {
+  color: var(--color-healthy);
+  font-size: 0.75rem;
+}
+
+.proposal-ready[data-ready="false"] {
+  color: var(--color-draft);
+  font-size: 0.75rem;
+}
+
+.proposal-section summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.proposal-section-body ul,
+.proposal-section-body ol {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+  font-size: 0.78rem;
+}
+
+.proposal-decisions {
+  list-style: none;
+  padding-left: 0;
+}
+
+.proposal-decision {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.proposal-question {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.proposal-explanation {
+  margin: var(--space-1) 0;
+  font-size: 0.72rem;
+  color: var(--color-muted);
+}
+
+.proposal-decision-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.proposal-decision-controls input,
+.proposal-decision-controls select {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.proposal-operations li[data-resolution="removed"] {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.proposal-issues {
+  color: var(--color-attention);
 }

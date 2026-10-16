@@ -3,6 +3,7 @@
 import { api } from "../apiClient";
 import type {
   AssistantStatus,
+  ChangeSetDetail,
   ChatMessage,
   ConversationDetail,
   ConversationSummary,
@@ -102,4 +103,34 @@ export function openEventStream(
   return new EventSource(
     `${base(workspaceId)}/conversations/${conversationId}/events?since=${since}`,
   );
+}
+
+// -- helper change sets (authoritative proposal records) --------------------
+
+function changeSetBase(workspaceId: string, changeSetId: string): string {
+  return `/api/workspaces/${workspaceId}/helper-actions/change-sets/${changeSetId}`;
+}
+
+export function fetchChangeSet(workspaceId: string, changeSetId: string): Promise<ChangeSetDetail> {
+  return api<ChangeSetDetail>(changeSetBase(workspaceId, changeSetId));
+}
+
+export function validateChangeSet(
+  workspaceId: string,
+  changeSetId: string,
+): Promise<ChangeSetDetail> {
+  return api<ChangeSetDetail>(`${changeSetBase(workspaceId, changeSetId)}/validate`, {
+    method: "POST",
+  });
+}
+
+export function resolveChangeSet(
+  workspaceId: string,
+  changeSetId: string,
+  resolutions: Record<string, unknown>[],
+): Promise<ChangeSetDetail> {
+  return api<ChangeSetDetail>(`${changeSetBase(workspaceId, changeSetId)}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ resolutions }),
+  });
 }

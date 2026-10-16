@@ -463,9 +463,11 @@ def tool_manifest(
 ) -> ToolManifestResponse:
     workspace = _workspace(db, user, workspace_id)
     disciplines = list(workspace.disciplines or [])
+    state = _resolve_state(db, workspace, None)
+    state_type = state.state_type if state else "current"
     return ToolManifestResponse(
-        tools=tools.tool_manifest(disciplines),
-        scope={"disciplines": disciplines},
+        tools=tools.tool_manifest(disciplines, state_type),
+        scope={"disciplines": disciplines, "state_type": state_type},
     )
 
 
@@ -485,8 +487,7 @@ def internal_manifest(
     x_assistant_service_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _require_service_token(x_assistant_service_token)
-    all_disciplines = ["enterprise", "information", "solution", "integration"]
-    return {"tools": tools.tool_manifest(all_disciplines)}
+    return {"tools": tools.plugin_manifest()}
 
 
 @internal_router.get("/scope", response_model=InternalScopeResponse)
@@ -527,5 +528,5 @@ def internal_call(
         email=user_row.email,
         tenant_name="",
     )
-    outcome = tools.dispatch_read_tool(db, user, conversation, payload.tool, payload.arguments)
+    outcome = tools.dispatch_tool(db, user, conversation, payload.tool, payload.arguments)
     return InternalToolCallResponse(**outcome)

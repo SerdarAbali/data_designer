@@ -160,6 +160,7 @@ class OperationResponse(BaseModel):
     post_fingerprint: dict[str, Any] = Field(default_factory=dict)
     undo_status: str = "pending"
     undo_conflict: dict[str, Any] = Field(default_factory=dict)
+    resolution_state: str = "active"
 
 
 class ChangeSetResponse(BaseModel):
@@ -176,6 +177,7 @@ class ChangeSetResponse(BaseModel):
     input_summary: dict[str, Any] = Field(default_factory=dict)
     assumptions: list[Any] = Field(default_factory=list)
     unresolved_decisions: list[Any] = Field(default_factory=list)
+    unresolved_details: list[Any] = Field(default_factory=list)
     warnings: list[Any] = Field(default_factory=list)
     reused_objects: list[Any] = Field(default_factory=list)
     proposed_objects: list[Any] = Field(default_factory=list)

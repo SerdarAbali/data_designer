@@ -159,6 +159,7 @@ def add_message(
     content: str,
     status_value: str = "complete",
     error_code: str | None = None,
+    referenced_change_set_ids: list[str] | None = None,
 ) -> AssistantMessage:
     message = AssistantMessage(
         conversation_id=conversation.id,
@@ -169,6 +170,7 @@ def add_message(
         content=content,
         status=status_value,
         error_code=error_code,
+        referenced_change_set_ids=list(referenced_change_set_ids or []),
     )
     db.add(message)
     conversation.message_count = (conversation.message_count or 0) + 1
@@ -255,6 +257,7 @@ def record_tool_call(
     error_code: str | None,
     duration_ms: int | None,
     result_summary: dict,
+    change_set_id: UUID | None = None,
 ) -> AssistantToolCall:
     existing = db.scalar(
         select(AssistantToolCall).where(
@@ -276,6 +279,7 @@ def record_tool_call(
         error_code=error_code,
         duration_ms=duration_ms,
         result_summary=result_summary,
+        change_set_id=change_set_id,
         completed_at=_now(),
     )
     db.add(call)

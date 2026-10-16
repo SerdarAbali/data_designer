@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -125,9 +126,25 @@ def _tool_result_summary(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_change_set_id(tool: dict[str, Any]) -> str | None:
+    output = str(tool.get("output") or "")
+    if not output:
+        return None
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        raw = parsed.get("change_set_id")
+        if raw:
+            return str(raw)
+    return None
+
+
 def _record_tools(
     db: Session, conversation: AssistantConversation, tools: list[dict[str, Any]]
-) -> None:
+) -> list[str]:
+    created: list[str] = []
     for tool in tools:
         name = tool.get("name") or "unknown"
         call_id = tool.get("call_id") or arguments_hash({"name": name, "at": time.time()})
@@ -140,6 +157,7 @@ def _record_tools(
                 error_code = "not_permitted_in_scope"
             else:
                 error_code = "tool_error"
+        change_set_id = _extract_change_set_id(tool)
         service.record_tool_call(
             db,
             conversation,
@@ -154,7 +172,22 @@ def _record_tools(
             error_code=error_code,
             duration_ms=None,
             result_summary=_tool_result_summary(tool),
+            change_set_id=UUID(change_set_id) if change_set_id else None,
         )
+        if change_set_id:
+            created.append(change_set_id)
+            service.add_event(
+                db, conversation, "proposal.created", {"change_set_id": change_set_id, "tool": name}
+            )
+        if name.endswith("validate_change_set") and change_set_id:
+            parsed_ok = "validation_failed" not in str(tool.get("output") or "")
+            service.add_event(
+                db,
+                conversation,
+                "proposal.validated" if parsed_ok else "proposal.validation_failed",
+                {"change_set_id": change_set_id},
+            )
+    return created
 
 
 def run_turn(
@@ -272,8 +305,9 @@ def _run_turn(
             service.add_event(db, conversation, "assistant.delta", {"text": text})
             db.commit()
         if finished:
+            created: list[str] = []
             if tools:
-                _record_tools(db, conversation, tools)
+                created = _record_tools(db, conversation, tools)
                 for tool in tools:
                     service.add_event(
                         db,
@@ -292,6 +326,7 @@ def _run_turn(
         content=assistant_text,
         status_value="complete" if finished else "failed",
         error_code=None if finished else "turn_timeout",
+        referenced_change_set_ids=created,
     )
     service.add_event(
         db,

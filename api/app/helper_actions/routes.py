@@ -22,7 +22,7 @@ from app.auth.dependencies import (
     require_csrf,
 )
 from app.db import get_session
-from app.helper_actions import apply, reads, service
+from app.helper_actions import apply, reads, resolution, service
 from app.helper_actions.context import HelperContext, resolve_context
 from app.helper_actions.schemas import (
     ApplyResponse,
@@ -171,6 +171,23 @@ def get_change_set_status(
         operation_counts=counts,
         issues=issues,
     )
+
+
+@router.post("/change-sets/{change_set_id}/resolve", response_model=ChangeSetResponse)
+def resolve_change_set_endpoint(
+    workspace_id: UUID,
+    change_set_id: UUID,
+    payload: resolution.ResolutionRequest,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> ChangeSetResponse:
+    require_csrf(request, auth_session)
+    ctx = resolve_context(db, user, workspace_id)
+    change_set = service.get_change_set(ctx, change_set_id)
+    resolution.resolve_change_set(ctx, change_set, payload)
+    return service.to_response(ctx, change_set)
 
 
 @router.post("/change-sets/{change_set_id}/validate", response_model=ChangeSetResponse)

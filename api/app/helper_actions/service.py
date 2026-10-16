@@ -94,7 +94,7 @@ def load_operations(db: Session, change_set_id: UUID) -> list[HelperChangeOperat
 
 
 def _operation_fingerprint(op: HelperChangeOperation) -> dict[str, Any]:
-    return {
+    fingerprint = {
         "operation_id": op.operation_id,
         "domain_action": op.domain_action,
         "target_type": op.target_type,
@@ -105,6 +105,11 @@ def _operation_fingerprint(op: HelperChangeOperation) -> dict[str, Any]:
         "depends_on": sorted(op.depends_on or []),
         "explanation": op.explanation or "",
     }
+    # Only a non-active resolution state changes the hash, so every hash stored
+    # before this slice stays byte-identical.
+    if getattr(op, "resolution_state", "active") != "active":
+        fingerprint["resolution_state"] = op.resolution_state
+    return fingerprint
 
 
 def compute_proposal_hash(
@@ -1436,7 +1441,9 @@ def validate_change_set(ctx: HelperContext, change_set: HelperChangeSet) -> Help
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "proposal_stale", "message": "The proposal changed; re-create it"},
         )
-    operations = load_operations(ctx.db, change_set.id)
+    operations = [
+        op for op in load_operations(ctx.db, change_set.id) if op.resolution_state == "active"
+    ]
     known = {op.operation_id for op in operations}
     issues: dict[str, list[dict[str, Any]]] = {op.operation_id: [] for op in operations}
     aggregate: list[dict[str, Any]] = []
@@ -1636,6 +1643,7 @@ def to_response(ctx: HelperContext, change_set: HelperChangeSet) -> ChangeSetRes
         input_summary=change_set.input_summary or {},
         assumptions=change_set.assumptions or [],
         unresolved_decisions=change_set.unresolved_decisions or [],
+        unresolved_details=change_set.unresolved_details or [],
         warnings=change_set.warnings or [],
         reused_objects=change_set.reused_objects or [],
         proposed_objects=change_set.proposed_objects or [],
@@ -1673,6 +1681,7 @@ def to_response(ctx: HelperContext, change_set: HelperChangeSet) -> ChangeSetRes
                 post_fingerprint=op.post_fingerprint or {},
                 undo_status=op.undo_status,
                 undo_conflict=op.undo_conflict or {},
+                resolution_state=op.resolution_state,
             )
             for op in operations
         ],

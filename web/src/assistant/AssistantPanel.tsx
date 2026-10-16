@@ -9,15 +9,23 @@
 
 import React from "react";
 
-import { READ_ONLY_NOTICE, runtimeReady, statusMessage } from "./assistantModel";
+import {
+  CURRENT_READ_ONLY_NOTICE,
+  READ_ONLY_NOTICE,
+  runtimeReady,
+  statusMessage,
+} from "./assistantModel";
 import type { ScopeSnapshot } from "./assistantTypes";
+import { ProposalPanel } from "./ProposalPanel";
 import { useAssistant } from "./useAssistant";
 
 export interface AssistantPanelProps {
   workspaceId: string | null;
   workspaceName: string;
   disciplines: string[];
+  discipline: string;
   states: { id: string; name: string; state_type: string }[];
+  stateId: string | null;
   workbenchView: string;
   selectionIds: string[];
   open: boolean;
@@ -42,29 +50,35 @@ export function AssistantPanel({
   workspaceId,
   workspaceName,
   disciplines,
+  discipline,
   states,
+  stateId,
   workbenchView,
   selectionIds,
   open,
   onClose,
 }: AssistantPanelProps) {
-  const defaultStateId =
+  const fallbackStateId =
     states.find((state) => state.state_type !== "current")?.id ?? states[0]?.id ?? null;
-  const [stateId, setStateId] = React.useState<string | null>(defaultStateId);
+  const [stateOverride, setStateOverride] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState("");
 
   React.useEffect(() => {
-    setStateId(defaultStateId);
-  }, [defaultStateId]);
+    setStateOverride(null);
+  }, [stateId]);
+
+  const effectiveStateId = stateOverride ?? stateId ?? fallbackStateId;
+  const activeState = states.find((state) => state.id === effectiveStateId) ?? null;
+  const isCurrent = activeState?.state_type === "current";
 
   const scope: ScopeSnapshot = React.useMemo(
     () => ({
-      stateId,
-      discipline: disciplines[0] ?? null,
+      stateId: effectiveStateId,
+      discipline,
       workbenchView,
       selectionIds,
     }),
-    [stateId, disciplines, workbenchView, selectionIds],
+    [effectiveStateId, discipline, workbenchView, selectionIds],
   );
 
   const { state, newConversation, removeConversation, selectConversation, send, cancel, retry } =
@@ -113,6 +127,11 @@ export function AssistantPanel({
       <p className="assistant-readonly" role="note">
         {READ_ONLY_NOTICE}
       </p>
+      {isCurrent ? (
+        <p className="assistant-readonly assistant-current-notice" role="note">
+          {CURRENT_READ_ONLY_NOTICE}
+        </p>
+      ) : null}
 
       <div className="assistant-status" data-ready={ready} role="status">
         {statusMessage(state.status)}
@@ -133,8 +152,8 @@ export function AssistantPanel({
           State
           <select
             aria-label="Architecture state"
-            value={stateId ?? ""}
-            onChange={(event) => setStateId(event.target.value || null)}
+            value={effectiveStateId ?? ""}
+            onChange={(event) => setStateOverride(event.target.value || null)}
           >
             {states.map((state) => (
               <option key={state.id} value={state.id}>
@@ -196,6 +215,11 @@ export function AssistantPanel({
           </article>
         ))}
       </div>
+
+      <ProposalPanel
+        workspaceId={workspaceId}
+        changeSetId={state.activeProposalId}
+      />
 
       <form className="assistant-composer" onSubmit={submit}>
         <textarea

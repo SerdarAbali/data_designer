@@ -71,6 +71,56 @@ export interface AssistantEvent {
   status?: string;
   reason?: string;
   chars?: number;
+  change_set_id?: string;
+}
+
+export interface ProposalOperation {
+  operation_id: string;
+  ordinal: number;
+  domain_action: string;
+  target_type: string;
+  target_id: string | null;
+  temporary_id: string | null;
+  proposed_value: Record<string, unknown>;
+  depends_on: string[];
+  validation_status: string;
+  validation_issues: { code?: string; message?: string }[];
+  resolution_state: string;
+  explanation?: string | null;
+}
+
+export interface ProposalDecision {
+  decision_id: string;
+  operation_id: string;
+  kind: string;
+  question: string;
+  explanation: string;
+  options: { key: string; label: string; object_id?: string | null }[];
+  required: boolean;
+  affected_operation_ids: string[];
+  resolution_state: string;
+}
+
+export interface ChangeSetDetail {
+  id: string;
+  helper_name: string;
+  status: string;
+  state_id: string | null;
+  state_type: string | null;
+  summary: string | null;
+  proposal_hash: string | null;
+  assumptions: unknown[];
+  warnings: unknown[];
+  unresolved_decisions: unknown[];
+  unresolved_details: ProposalDecision[];
+  reused_objects: { target_type?: string; target_id?: string }[];
+  proposed_objects: { temporary_id?: string; target_type?: string }[];
+  validation_summary: Record<string, unknown>;
+  validated_at: string | null;
+  approved_at: string | null;
+  applied_at: string | null;
+  undone_at: string | null;
+  operations: ProposalOperation[];
 }
 
 export interface AssistantState {
@@ -82,6 +132,8 @@ export interface AssistantState {
   streaming: boolean;
   error: string;
   loaded: boolean;
+  proposalIds: string[];
+  activeProposalId: string | null;
 }
 
 export function initialAssistantState(): AssistantState {
@@ -94,5 +146,7 @@ export function initialAssistantState(): AssistantState {
     streaming: false,
     error: "",
     loaded: false,
+    proposalIds: [],
+    activeProposalId: null,
   };
 }

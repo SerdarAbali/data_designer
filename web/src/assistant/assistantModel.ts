@@ -36,6 +36,23 @@ export function reduceEvent(state: AssistantState, event: AssistantEvent): Assis
     }
     case "tool.completed":
       return { ...state, tools: appendTool(state.tools, event) };
+    case "proposal.created": {
+      const id = event.change_set_id ?? null;
+      if (!id) return state;
+      return {
+        ...state,
+        activeProposalId: id,
+        proposalIds: state.proposalIds.includes(id) ? state.proposalIds : [...state.proposalIds, id],
+      };
+    }
+    case "proposal.selected": {
+      const id = event.change_set_id ?? null;
+      return id ? { ...state, activeProposalId: id } : state;
+    }
+    case "proposal.validated":
+    case "proposal.validation_failed":
+    case "proposal.stale":
+      return state;
     case "turn.cancelled":
       return {
         ...state,
@@ -117,4 +134,33 @@ export function statusMessage(status: AssistantState["status"]): string {
 }
 
 export const READ_ONLY_NOTICE =
-  "Read-only: the assistant can inspect and explain architecture. It cannot propose, approve, apply, or change anything.";
+  "The Assistant can inspect architecture and prepare proposals. It cannot approve, apply, or undo changes. Those actions require you.";
+
+export const CURRENT_READ_ONLY_NOTICE =
+  "Current is read-only. Switch to a Candidate or Target state to prepare proposals.";
+
+/** The active context published by the architecture canvas. */
+export interface CanvasScope {
+  discipline: string;
+  workbenchView: string;
+  stateId: string | null;
+  selectionIds: string[];
+}
+
+export const DEFAULT_CANVAS_SCOPE: CanvasScope = {
+  discipline: "enterprise",
+  workbenchView: "canvas",
+  stateId: null,
+  selectionIds: [],
+};
+
+/**
+ * The assistant context for the active workspace view. The canvas is the source
+ * of truth for discipline/state/selection; only the view label is adjusted for
+ * the catalog and integration workspaces.
+ */
+export function resolveAssistantScope(canvasScope: CanvasScope, activeView: string): CanvasScope {
+  if (activeView === "catalog") return { ...canvasScope, workbenchView: "catalog" };
+  if (activeView === "integrations") return { ...canvasScope, workbenchView: "integration" };
+  return canvasScope;
+}

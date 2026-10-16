@@ -35,12 +35,12 @@ def test_manifest_file_matches_backend_tools() -> None:
         (repo_root / "assistant-runtime" / "assistant-tools.json").read_text(encoding="utf-8")
     )
     declared = {tool["name"] for tool in manifest["tools"]}
-    assert declared == set(tools.manifest_tool_names())
+    assert declared == set(tools.all_tool_names())
     assert all(tool["codemode"] is False for tool in manifest["tools"])
+    assert all("schema" in tool for tool in manifest["tools"])
 
 
-def test_plugin_declares_exactly_the_backend_tools() -> None:
-    import re
+def test_plugin_loads_the_generated_manifest_and_is_fail_closed() -> None:
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -52,25 +52,28 @@ def test_plugin_declares_exactly_the_backend_tools() -> None:
         / "architecture-assistant"
         / "index.ts"
     ).read_text(encoding="utf-8")
-    declared = set(re.findall(r'name: "(architecture_[a-z_]+)"', plugin))
-    assert declared == set(tools.manifest_tool_names())
+    assert "assistant-tools.json" in plugin
     assert "codemode: false" in plugin
+    assert "return []" in plugin  # fail closed when the manifest is unreadable
 
 
 def test_manifest_is_read_only_namespaced_and_strict() -> None:
-    manifest = tools.tool_manifest(ALL_DISCIPLINES)
+    manifest = tools.tool_manifest(ALL_DISCIPLINES, "candidate")
     assert manifest
     for entry in manifest:
         assert entry["name"].startswith("architecture_")
         assert entry["input_schema"]["additionalProperties"] is False
 
 
-def test_no_proposal_apply_or_undo_tools_exist() -> None:
-    names = set(tools.manifest_tool_names())
-    for forbidden in tools.FORBIDDEN_TOOL_NAMES:
+def test_no_approve_apply_or_undo_tools_exist() -> None:
+    names = set(tools.all_tool_names())
+    for forbidden in ("approve_change_set", "apply_change_set", "undo_change_set"):
         assert forbidden not in names
-    assert not any("propose" in name for name in names)
-    assert not any("apply" in name or "undo" in name or "approve" in name for name in names)
+        assert f"architecture_{forbidden}" not in names
+    assert not any("approve" in name or "apply" in name or "undo" in name for name in names)
+    # Proposal and status tools are the point of this slice.
+    assert any("propose" in name for name in names)
+    assert "architecture_validate_change_set" in names
 
 
 def test_dynamic_discipline_scoping() -> None:
@@ -119,7 +122,7 @@ def test_dispatch_rejects_oversized_arguments(assistant_env) -> None:
             _user(assistant_env),
             conversation,
             "architecture_search_canonical_objects",
-            {"query": "x" * 5000},
+            {"query": "x" * 20000},
         )
     assert outcome["status"] == "denied"
     assert outcome["error_code"] == "oversized_arguments"

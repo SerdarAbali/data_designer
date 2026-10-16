@@ -27,7 +27,9 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof AssistantPan
       workspaceId={null}
       workspaceName="Demo"
       disciplines={["enterprise", "information"]}
+      discipline="enterprise"
       states={[]}
+      stateId={null}
       workbenchView="canvas"
       selectionIds={[]}
       open
@@ -46,12 +48,58 @@ describe("AssistantLauncher", () => {
 });
 
 describe("AssistantPanel", () => {
-  it("shows the explicit read-only notice and no write controls", () => {
+  it("shows the explicit notice and no write controls", () => {
     renderPanel();
-    expect(screen.getByText(/Read-only: the assistant can inspect and explain architecture/i)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /The Assistant can inspect architecture and prepare proposals. It cannot approve, apply, or undo changes. Those actions require you./i,
+      ),
+    ).toBeTruthy();
     for (const forbidden of [/apply/i, /approve/i, /undo/i, /propose/i]) {
       expect(screen.queryByRole("button", { name: forbidden })).toBeNull();
     }
+  });
+
+  it("shows the active discipline published by the canvas (Integration tab)", () => {
+    renderPanel({ discipline: "integration", workbenchView: "integration" });
+    expect(screen.getByText(/Discipline: integration/)).toBeTruthy();
+    expect(screen.queryByText(/Discipline: enterprise/)).toBeNull();
+    expect(screen.getByText(/View: integration/)).toBeTruthy();
+  });
+
+  it("clarifies that Current is read-only", () => {
+    renderPanel({
+      states: [{ id: "s-current", name: "Current", state_type: "current" }],
+      stateId: "s-current",
+    });
+    expect(
+      screen.getByText(/Current is read-only. Switch to a Candidate or Target state to prepare proposals./i),
+    ).toBeTruthy();
+  });
+
+  it("updates the state chip immediately when the canvas state changes", () => {
+    const states = [
+      { id: "s-current", name: "Current", state_type: "current" },
+      { id: "s-candidate", name: "Candidate", state_type: "candidate" },
+    ];
+    const { rerender } = renderPanel({ states, stateId: "s-current" });
+    expect(screen.getByLabelText("Architecture state")).toHaveProperty("value", "s-current");
+    rerender(
+      <AssistantPanel
+        workspaceId={null}
+        workspaceName="Demo"
+        disciplines={["enterprise"]}
+        discipline="enterprise"
+        states={states}
+        stateId="s-candidate"
+        workbenchView="canvas"
+        selectionIds={[]}
+        open
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByLabelText("Architecture state")).toHaveProperty("value", "s-candidate");
+    expect(screen.queryByText(/Current is read-only/)).toBeNull();
   });
 
   it("renders a disabled state when the workspace is not enabled", async () => {

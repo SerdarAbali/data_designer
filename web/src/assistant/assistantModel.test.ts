@@ -4,8 +4,10 @@ import {
   applyDetail,
   initialAssistantState,
   reduceEvent,
+  resolveAssistantScope,
   runtimeReady,
   statusMessage,
+  DEFAULT_CANVAS_SCOPE,
 } from "./assistantModel";
 import type { AssistantEvent, ConversationDetail } from "./assistantTypes";
 
@@ -78,6 +80,27 @@ describe("assistant model", () => {
     const state = applyDetail(initialAssistantState(), detail);
     expect(state.activeId).toBe("c1");
     expect(state.messages).toHaveLength(1);
+  });
+
+  it("resolves the assistant scope from the canvas context", () => {
+    const integration = resolveAssistantScope(
+      {
+        ...DEFAULT_CANVAS_SCOPE,
+        discipline: "integration",
+        workbenchView: "integration",
+        stateId: "s1",
+        selectionIds: ["obj-1"],
+      },
+      "canvas",
+    );
+    expect(integration.discipline).toBe("integration");
+    expect(integration.workbenchView).toBe("integration");
+    expect(integration.selectionIds).toEqual(["obj-1"]);
+
+    expect(resolveAssistantScope(DEFAULT_CANVAS_SCOPE, "catalog").workbenchView).toBe("catalog");
+    expect(resolveAssistantScope(DEFAULT_CANVAS_SCOPE, "integrations").workbenchView).toBe(
+      "integration",
+    );
   });
 
   it("reports readiness and disabled states", () => {

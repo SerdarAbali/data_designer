@@ -193,6 +193,33 @@ describe("architecture studio context", () => {
   });
 });
 
+describe("assistant context publishing", () => {
+  it("publishes the active Integration discipline and state to the assistant context", async () => {
+    const onAssistantScopeChange = vi.fn();
+    render(<ArchitectureCanvas {...props} onAssistantScopeChange={onAssistantScopeChange} />);
+
+    await waitFor(() => expect(onAssistantScopeChange).toHaveBeenCalled());
+    await waitFor(() => {
+      const scope = onAssistantScopeChange.mock.calls.at(-1)![0];
+      expect(scope.stateId).toBe("candidate-a");
+    });
+    const scope = onAssistantScopeChange.mock.calls.at(-1)![0];
+    expect(scope.discipline).toBe("integration");
+    expect(scope.workbenchView).toBe("integration");
+  });
+
+  it("updates the published discipline when the user switches tabs", async () => {
+    const onAssistantScopeChange = vi.fn();
+    render(<ArchitectureCanvas {...props} onAssistantScopeChange={onAssistantScopeChange} />);
+    await waitFor(() => expect(onAssistantScopeChange).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /enterprise/i }));
+    await waitFor(() => {
+      expect(onAssistantScopeChange.mock.calls.at(-1)![0].discipline).toBe("enterprise");
+    });
+  });
+});
+
 describe("workbench trace navigation", () => {
   it("switches workbench from a trace link while preserving the workspace and active state", async () => {
     sessionStorage.setItem("dd_active_discipline:ws-a", "enterprise");

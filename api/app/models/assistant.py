@@ -97,6 +97,9 @@ class AssistantMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="complete")
     error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    referenced_change_set_ids: Mapped[list] = mapped_column(
+        json_type, nullable=False, default=list
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -135,6 +138,7 @@ class AssistantToolCall(Base):
     error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_summary: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
+    change_set_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

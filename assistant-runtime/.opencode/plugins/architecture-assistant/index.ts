@@ -1,66 +1,55 @@
 /**
- * Restricted Architecture Assistant plugin (Slice C).
+ * Restricted Architecture Assistant plugin (proposal + read tools).
  *
- * It declares the read-only architecture tools and proxies every call to the
- * authoritative backend dispatch endpoint. The backend owns validation,
- * scoping, and result bounding; the plugin only transports.
- *
- * Tool definitions are declared statically so plugin setup never depends on the
- * backend being up (a startup race would otherwise register zero tools). The
- * backend manifest (assistant-tools.json) and this list are kept in sync by a
- * test.
+ * Tool definitions (name, description, strict JSON Schema) come from the
+ * generated manifest baked into the image at /sandbox/assistant-tools.json. The
+ * backend remains authoritative: every call is proxied to
+ * /internal/assistant/call, re-validated there, and scoped from the OpenCode
+ * session id. The plugin holds no business logic and no capability of its own.
  *
  * Security invariants:
  *   - every tool declares `options.codemode: false` (Slice A blocking defect);
- *   - the `context` hook resolves scope from the OpenCode session id via the
- *     backend and removes every out-of-scope tool; if scope cannot be resolved,
- *     all architecture tools are removed for that request (fail closed);
- *   - tool output is whatever the backend returns: bounded and redacted.
+ *   - registration fails closed: if the manifest cannot be read, no tool is
+ *     registered;
+ *   - the `context` hook resolves scope from the session id via the backend and
+ *     removes every out-of-scope tool; if scope cannot be resolved, all
+ *     architecture tools are removed for that request;
+ *   - approve/apply/undo are never registered (they are absent from the backend
+ *     registry, so they cannot appear here).
  */
 
+import { readFileSync } from "node:fs"
 import { Plugin } from "@opencode/plugin"
 
 const BACKEND = (globalThis as any).process?.env?.ARCHITECTURE_BACKEND_URL ?? ""
 const TOKEN = (globalThis as any).process?.env?.ARCHITECTURE_SERVICE_TOKEN ?? ""
+const TOOLS_PATH =
+  (globalThis as any).process?.env?.ARCHITECTURE_TOOLS_PATH ?? "/sandbox/assistant-tools.json"
 
-const OBJECT_SCHEMA = {
-  type: "object",
-  properties: { object_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 25 } },
-  required: ["object_id"],
-  additionalProperties: false,
-}
-const LIMIT_SCHEMA = {
-  type: "object",
-  properties: { limit: { type: "integer", minimum: 1, maximum: 25 } },
-  additionalProperties: false,
-}
-const EMPTY_SCHEMA = { type: "object", properties: {}, additionalProperties: false }
-const CONTRACT_SCHEMA = {
-  type: "object",
-  properties: { contract_id: { type: "string" } },
-  required: ["contract_id"],
-  additionalProperties: false,
+type ToolSpec = {
+  name: string
+  kind?: string
+  codemode?: boolean
+  description?: string
+  schema?: Record<string, unknown>
 }
 
-type ToolSpec = { name: string; description: string; schema: Record<string, unknown> }
-
-const TOOLS: ToolSpec[] = [
-  { name: "architecture_get_workspace_context", description: "Read workspace name, description, enabled disciplines, and states. Read-only.", schema: EMPTY_SCHEMA },
-  { name: "architecture_get_enabled_disciplines", description: "List enabled architecture disciplines. Read-only.", schema: EMPTY_SCHEMA },
-  { name: "architecture_get_architecture_state", description: "Read a bounded preview of the active architecture state. Read-only.", schema: LIMIT_SCHEMA },
-  { name: "architecture_search_canonical_objects", description: "Search canonical architecture objects by name/kind. Read-only.", schema: { type: "object", properties: { query: { type: "string" }, kind: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 25 } }, additionalProperties: false } },
-  { name: "architecture_get_object_details", description: "Read a canonical object's details and state membership. Read-only.", schema: OBJECT_SCHEMA },
-  { name: "architecture_get_object_relationships", description: "List stored typed relationships for an object. Read-only.", schema: OBJECT_SCHEMA },
-  { name: "architecture_get_object_usages", description: "List how an object is used in the active state. Read-only.", schema: OBJECT_SCHEMA },
-  { name: "architecture_trace_architecture_path", description: "Trace bounded connectivity from an object. Read-only.", schema: { type: "object", properties: { object_id: { type: "string" }, direction: { type: "string", enum: ["both", "outgoing", "incoming"] }, depth: { type: "integer", minimum: 1, maximum: 2 }, limit: { type: "integer", minimum: 1, maximum: 25 } }, required: ["object_id"], additionalProperties: false } },
-  { name: "architecture_compare_current_candidate", description: "Compare the active candidate against Current. Read-only.", schema: LIMIT_SCHEMA },
-  { name: "architecture_list_catalog_systems", description: "List Catalog systems. Read-only.", schema: LIMIT_SCHEMA },
-  { name: "architecture_inspect_catalog_schema", description: "Inspect bounded Catalog fields. Read-only.", schema: { type: "object", properties: { system_id: { type: "string" }, object_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 25 } }, additionalProperties: false } },
-  { name: "architecture_list_integration_contracts", description: "List integration Contracts. Read-only.", schema: LIMIT_SCHEMA },
-  { name: "architecture_inspect_contract", description: "Inspect one Contract. Read-only.", schema: CONTRACT_SCHEMA },
-  { name: "architecture_inspect_mapping_coverage", description: "Inspect Contract mapping coverage. Read-only.", schema: CONTRACT_SCHEMA },
-  { name: "architecture_inspect_scenarios_and_conformance", description: "Inspect scenarios and conformance for a Contract. Read-only.", schema: { type: "object", properties: { contract_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 25 } }, required: ["contract_id"], additionalProperties: false } },
-]
+function loadTools(): ToolSpec[] {
+  try {
+    const parsed = JSON.parse(readFileSync(TOOLS_PATH, "utf8"))
+    if (!parsed || !Array.isArray(parsed.tools)) return []
+    return parsed.tools.filter(
+      (tool: ToolSpec) =>
+        typeof tool?.name === "string" &&
+        tool.name.startsWith("architecture_") &&
+        tool.codemode === false &&
+        tool.schema &&
+        typeof tool.schema === "object",
+    )
+  } catch {
+    return []
+  }
+}
 
 function headers(): Record<string, string> {
   return { "Content-Type": "application/json", "X-Assistant-Service-Token": TOKEN }
@@ -110,16 +99,19 @@ export default Plugin.define({
   id: "architecture-assistant",
   async setup(ctx) {
     try {
+      const tools = loadTools()
+      if (tools.length === 0) return
+
       await ctx.tool.transform((editor) => {
         editor.namespace({
           name: "architecture",
-          description: "Architecture Assistant read-only tools",
+          description: "Architecture Assistant tools",
         })
-        for (const spec of TOOLS) {
+        for (const spec of tools) {
           const bare = spec.name.replace(/^architecture_/, "")
           editor.add({
             name: bare,
-            description: spec.description,
+            description: spec.description ?? "Architecture Assistant tool.",
             options: { namespace: "architecture", codemode: false },
             input: spec.schema,
             execute: async (input: unknown, context: any) => {
@@ -133,7 +125,7 @@ export default Plugin.define({
                 return {
                   content: JSON.stringify({
                     error: outcome.error_code ?? "tool_error",
-                    note: "This read tool is not permitted in the current scope.",
+                    note: "This tool is not permitted in the current scope.",
                   }),
                 }
               }

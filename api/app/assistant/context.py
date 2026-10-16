@@ -62,7 +62,8 @@ def resolve_scope(
     if workspace is None:
         return None
     disciplines = list(workspace.disciplines or [])
-    return conversation, workspace, allowed_tool_names(disciplines)
+    allowed = allowed_tool_names(disciplines, conversation.state_type or "current")
+    return conversation, workspace, allowed
 
 
 def scope_fingerprint(

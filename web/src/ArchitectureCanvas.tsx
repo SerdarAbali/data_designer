@@ -116,6 +116,12 @@ type Props = {
   search?: string;
   registerNavigationGuard?: (guard: NavigationGuard) => void;
   visible?: boolean;
+  onAssistantScopeChange?: (scope: {
+    discipline: string;
+    workbenchView: string;
+    stateId: string | null;
+    selectionIds: string[];
+  }) => void;
 };
 
 type RelationshipEdge = ArchitectureRelationshipFlowEdge;
@@ -184,7 +190,7 @@ export default function ArchitectureCanvas(props: Props) {
   );
 }
 
-function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegration, onOpenCatalog, search = "", registerNavigationGuard, visible = true }: Props) {
+function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegration, onOpenCatalog, search = "", registerNavigationGuard, visible = true, onAssistantScopeChange }: Props) {
   const flow = useReactFlow<ArchitectureOccurrenceNode, RelationshipEdge>();
   const { requestFocus } = useWorkbenchNavigation();
   const canvasElement = React.useRef<HTMLDivElement>(null);
@@ -489,6 +495,26 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
   const selectedSystem = selectedOccurrence
     ? systemsById.get(selectedOccurrence.object_id) ?? null
     : null;
+
+  // Publish the active discipline, workbench subview, state, and selection to the
+  // workspace-level Assistant context. The canvas is the only source of truth:
+  // the model never supplies or overrides this context.
+  React.useEffect(() => {
+    if (!onAssistantScopeChange) return;
+    onAssistantScopeChange({
+      discipline: activeDiscipline,
+      workbenchView:
+        activeDiscipline === "integration" && integrationOverview ? "canvas" : activeDiscipline,
+      stateId: activeStateId || null,
+      selectionIds: selectedOccurrence ? [selectedOccurrence.object_id] : [],
+    });
+  }, [
+    onAssistantScopeChange,
+    activeDiscipline,
+    integrationOverview,
+    activeStateId,
+    selectedOccurrence,
+  ]);
 
   function openRelationshipIntegration(relationship: ResolvedRelationship | null) {
     if (relationship?.integrationId) onOpenIntegration(relationship.integrationId);

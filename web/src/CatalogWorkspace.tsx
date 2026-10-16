@@ -11,6 +11,11 @@ import type { NavigationGuard } from "./contextSaveQueue";
 import useStudioTheme from "./useStudioTheme";
 import { ApiError, api, csrfToken, list } from "./apiClient";
 import { AssistantLauncher, AssistantPanel } from "./assistant/AssistantPanel";
+import {
+  DEFAULT_CANVAS_SCOPE,
+  resolveAssistantScope,
+  type CanvasScope,
+} from "./assistant/assistantModel";
 
 type System = {
   id: string;
@@ -131,6 +136,7 @@ export default function CatalogWorkspace({
   }, []);
   const [activeView, setActiveView] = React.useState<"canvas" | "catalog" | "integrations">("canvas");
   const [assistantOpen, setAssistantOpen] = React.useState(false);
+  const [assistantScope, setAssistantScope] = React.useState<CanvasScope>(DEFAULT_CANVAS_SCOPE);
   const [architectureStates, setArchitectureStates] = React.useState<
     { id: string; name: string; state_type: string }[]
   >([]);
@@ -624,6 +630,8 @@ export default function CatalogWorkspace({
     window.addEventListener("pointerup", finish);
   }
 
+  const assistantViewScope = resolveAssistantScope(assistantScope, activeView);
+
   return (
     <main className={`workspace studio-workspace view-${activeView}`} aria-busy={transitioning}>
       <header className="workspace-header">
@@ -703,6 +711,7 @@ export default function CatalogWorkspace({
           key={activeWorkspace?.id ?? "loading"}
           workspace={activeWorkspace}
           visible={activeView === "canvas"}
+          onAssistantScopeChange={setAssistantScope}
           search={activeView === "canvas" ? studioSearch : ""}
           registerNavigationGuard={registerCanvasGuard}
           onOpenCatalog={() => void navigate("catalog")}
@@ -983,9 +992,11 @@ export default function CatalogWorkspace({
         workspaceId={activeWorkspace?.id ?? null}
         workspaceName={activeWorkspace?.name ?? tenantName}
         disciplines={activeWorkspace?.disciplines ?? []}
+        discipline={assistantViewScope.discipline}
         states={architectureStates}
-        workbenchView={activeView}
-        selectionIds={[]}
+        stateId={assistantViewScope.stateId}
+        workbenchView={assistantViewScope.workbenchView}
+        selectionIds={assistantViewScope.selectionIds}
         open={assistantOpen}
         onClose={() => setAssistantOpen(false)}
       />
