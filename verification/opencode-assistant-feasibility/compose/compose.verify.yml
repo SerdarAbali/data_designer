@@ -1,0 +1,64 @@
+# Disposable Compose proof for the Architecture Assistant network posture.
+#
+#   docker compose -f compose/compose.verify.yml up --build -d
+#
+# It proves three things:
+#   1. OpenCode can run as a Compose service that publishes NO host port;
+#   2. a sibling container can reach it over the Compose network by service name
+#      while the host cannot reach it at all;
+#   3. the server credential stays inside the OpenCode service definition.
+#
+# It is not part of the application stack and reuses no application service.
+
+name: archverify-opencode
+
+services:
+  opencode:
+    build:
+      context: ${ARCHVERIFY_BUILD_CONTEXT:?set ARCHVERIFY_BUILD_CONTEXT to the scratch build context}
+      dockerfile: Dockerfile
+    # No `ports:` mapping on purpose: the service is reachable only from other
+    # containers on this network.
+    expose:
+      - "4096"
+    networks:
+      - verify
+    healthcheck:
+      test:
+        - CMD
+        - opencode
+        - api
+        - get
+        - /api/info
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  probe:
+    image: debian:bookworm-slim
+    depends_on:
+      opencode:
+        condition: service_healthy
+    environment:
+      OPENCODE_PASSWORD: container-verify-password
+    networks:
+      - verify
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+        set -e
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get install -y -qq curl >/dev/null 2>&1 || true
+        echo "--- reach opencode by service name ---"
+        curl -sS -u "opencode:$$OPENCODE_PASSWORD" http://opencode:4096/api/info
+        echo
+        echo "--- unauthenticated request must fail ---"
+        code=$$(curl -sS -o /dev/null -w '%{http_code}' http://opencode:4096/api/info)
+        echo "status=$$code"
+        test "$$code" = "401"
+
+networks:
+  verify:
+    driver: bridge

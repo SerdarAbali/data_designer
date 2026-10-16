@@ -1,0 +1,63 @@
+# Isolated Slice B deployment verification.
+#
+# A dedicated Compose project (`slice-b-verify`) that builds and runs the pinned
+# production OpenCode image and runs the production capability probe from an
+# application (api) image container, over the private Compose network only.
+#
+# It publishes no host ports and does not touch the running application stack.
+#
+#   SLICE_B_OPENCODE_PASSWORD=... \
+#     docker compose -f slice-b.compose.yml build
+#   SLICE_B_OPENCODE_PASSWORD=... \
+#     docker compose -f slice-b.compose.yml up -d opencode
+#   SLICE_B_OPENCODE_PASSWORD=... \
+#     docker compose -f slice-b.compose.yml run --rm --no-deps api
+#   docker compose -f slice-b.compose.yml down -v
+
+name: slice-b-verify
+
+services:
+  opencode:
+    build:
+      context: ../../../assistant-runtime
+    # No `ports:` on purpose: reachable only from the `api` service.
+    expose:
+      - "4096"
+    environment:
+      OPENCODE_PASSWORD: ${SLICE_B_OPENCODE_PASSWORD:?set SLICE_B_OPENCODE_PASSWORD}
+    networks:
+      - assistant
+    healthcheck:
+      test: ["CMD", "opencode", "api", "get", "/api/info"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: "no"
+
+  api:
+    build:
+      context: ../../../api
+    entrypoint: ["sh", "-lc"]
+    command:
+      - "cd /app && PYTHONPATH=/app python /verify/slice_b_container_probe.py"
+    environment:
+      ASSISTANT_ENABLED: "true"
+      ASSISTANT_OPENCODE_BASE_URL: http://opencode:4096
+      ASSISTANT_OPENCODE_PASSWORD: ${SLICE_B_OPENCODE_PASSWORD:?set SLICE_B_OPENCODE_PASSWORD}
+      ASSISTANT_OPENCODE_PROFILE_PATH: /assistant-runtime/opencode.json
+      ASSISTANT_OPENCODE_TOOLS_PATH: /assistant-runtime/assistant-tools.json
+      ASSISTANT_OPENCODE_OPENAPI_SNAPSHOT_PATH: /assistant-runtime/openapi/opencode-2.0.30.json
+    volumes:
+      - ../../../assistant-runtime:/assistant-runtime:ro
+      - ./:/verify:ro
+    depends_on:
+      opencode:
+        condition: service_healthy
+    networks:
+      - assistant
+    restart: "no"
+
+networks:
+  assistant:
+    driver: bridge

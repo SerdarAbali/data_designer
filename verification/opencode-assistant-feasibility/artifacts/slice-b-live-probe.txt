@@ -1,0 +1,5 @@
+unauthenticated /api/info status: 401
+ready probe: ready (ok) observed=2.0.30
+version-mismatch probe: incompatible (version_mismatch)
+disabled probe: disabled (assistant_disabled)
+RESULT: PASS

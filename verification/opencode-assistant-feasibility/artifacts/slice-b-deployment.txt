@@ -1,0 +1,92 @@
+Slice B deployment verification (isolated Compose project `slice-b-verify`)
+=======================================================================
+
+Images built
+------------
+- slice-b-verify-opencode  (built from assistant-runtime/Dockerfile, pinned
+  @opencode/cli@2.0.30; build asserts the version)
+- slice-b-verify-api       (built from api/Dockerfile with the current code)
+First build attempt failed transiently in the OpenCode npm postinstall; a retry
+succeeded with no change to the Dockerfile.
+
+Version inside the image
+------------------------
+$ docker compose run --rm --no-deps --entrypoint opencode opencode --version
+opencode v2.0.30
+
+In-image restricted-profile checks (node, inside /sandbox)
+----------------------------------------------------------
+[PASS] deny-all policy present
+[PASS] no ask rule anywhere
+[PASS] default agent defined :: agent=architecture-assistant
+[PASS] steps bounded :: steps=12
+[PASS] built-in agents disabled
+[PASS] tool manifest present
+[PASS] probe tools use codemode:false
+[PASS] probe tools are namespaced
+[PASS] probe tools have explicit allow rules
+[PASS] no built-in coding capability allowed
+[PASS] plugin declares codemode:false
+[PASS] plugin has no shell/fs execution import
+IN-IMAGE RESULT: PASS
+
+Compose isolation
+-----------------
+compose ps ports:            4096/tcp        (exposed, not published)
+compose port opencode 4096:  :0              (no published port)
+docker inspect Ports:        {"4096/tcp":null}
+networks:                    slice-b-verify_assistant (isolated)
+host curl 127.0.0.1:4096:    connection refused
+opencode logs w/ password:   0
+
+Authentication (from the api image over the private network)
+------------------------------------------------------------
+[PASS] unauthenticated request rejected :: status=401
+[PASS] incorrect Basic credentials rejected :: status=401
+[PASS] API backend authenticates with server-side configuration :: status=200
+[PASS] observed OpenCode version is 2.0.30 :: 2.0.30
+
+Capability probe (production probe via the application backend)
+---------------------------------------------------------------
+[PASS] correct runtime reports ready :: state=ready reason=ok
+[PASS] ready observed version is 2.0.30
+[PASS] wrong expected version reports incompatible :: state=incompatible reason=version_mismatch
+[PASS] missing credentials report a safe non-ready status :: state=misconfigured reason=runtime_password_missing
+[PASS] invalid credentials report a safe non-ready status :: state=misconfigured reason=auth_failed
+[PASS] invalid-credential failure leaks no secret
+[PASS] restricted-profile mismatch fails closed :: state=misconfigured reason=deny_all_missing
+[PASS] no ask rule is accepted :: state=misconfigured reason=ask_rule_present
+[PASS] disabled mode performs no OpenCode request :: state=disabled requests=0
+
+Safe status endpoint
+--------------------
+[PASS] status endpoint returns exactly the safe keys ::
+       ['assistant_enabled', 'correlation_id', 'expected_opencode_version',
+        'observed_opencode_version', 'probe_checked_at', 'reason_code',
+        'runtime_status']
+[PASS] status reports ready
+[PASS] status observed version is 2.0.30
+[PASS] status response contains no credential or internal URL
+
+Forbidden routes / redaction
+----------------------------
+[PASS] all forbidden routes are rejected before network access
+[PASS] runtime adapter exposes no generic HTTP method
+[PASS] runtime exception leaks no credential :: code=http_error
+
+DEPLOYMENT RESULT: PASS
+
+Browser-facing configuration
+----------------------------
+web source/config references to opencode/OPENCODE_PASSWORD/:4096: none
+web service env in Compose: none (no ASSISTANT_/OPENCODE_ variables)
+
+Application stack
+-----------------
+architect-web-1 / architect-api-1 / architect-db-1 remained running throughout;
+no host OpenCode process was touched.
+
+Cleanup
+-------
+`docker compose -p slice-b-verify down -v` removed only the isolated project:
+no slice-b-verify containers or networks remain.

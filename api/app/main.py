@@ -8,6 +8,7 @@ from app.architecture.objects import router as architecture_objects_router
 from app.architecture.routes import router as architecture_router
 from app.architecture.solution import router as architecture_solution_router
 from app.architecture.traceability import router as architecture_traceability_router
+from app.assistant.routes import router as assistant_router
 from app.auth.routes import router as auth_router
 from app.catalog.routes import router as catalog_router
 from app.db import check_database
@@ -48,6 +49,7 @@ app.include_router(architecture_traceability_router)
 app.include_router(integration_design_router)
 app.include_router(imports_router)
 app.include_router(helper_actions_router)
+app.include_router(assistant_router)
 
 
 @app.get("/health", tags=["health"])

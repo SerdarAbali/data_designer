@@ -1,0 +1,29 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-8.4.0, pluggy-1.6.0 -- /home/sedu/architect/api/.venv/bin/python
+rootdir: /home/sedu/architect/verification/opencode-assistant-feasibility
+plugins: anyio-4.15.1
+collecting ... collected 21 items
+
+tests/test_opencode_feasibility.py::test_01_plugin_tool_executor_receives_authoritative_session_id PASSED [  4%]
+tests/test_opencode_feasibility.py::test_02_context_hook_is_awaited_and_restricts_tools PASSED [  9%]
+tests/test_opencode_feasibility.py::test_03_no_cross_session_scope_leakage PASSED [ 14%]
+tests/test_opencode_feasibility.py::test_04_permission_action_is_the_effective_tool_name PASSED [ 19%]
+tests/test_opencode_feasibility.py::test_05_plugin_declared_permission_action_is_enforced PASSED [ 23%]
+tests/test_opencode_feasibility.py::test_06_builtin_capabilities_are_denied PASSED [ 28%]
+tests/test_opencode_feasibility.py::test_07_scope_cannot_be_supplied_by_the_model PASSED [ 33%]
+tests/test_opencode_feasibility.py::test_08_out_of_scope_tool_cannot_be_invoked PASSED [ 38%]
+tests/test_opencode_feasibility.py::test_09_streaming_events_reach_the_client PASSED [ 42%]
+tests/test_opencode_feasibility.py::test_10_cancellation_terminates_generation PASSED [ 47%]
+tests/test_opencode_feasibility.py::test_11_disposed_session_cannot_be_used PASSED [ 52%]
+tests/test_opencode_feasibility.py::test_12_event_stream_reconnects_live PASSED [ 57%]
+tests/test_opencode_feasibility.py::test_20_server_is_loopback_only PASSED [ 61%]
+tests/test_opencode_feasibility.py::test_13_no_credential_in_messages_events_or_openapi PASSED [ 66%]
+tests/test_opencode_feasibility.py::test_13b_config_route_resolves_secrets_and_must_be_denied_to_the_browser PASSED [ 71%]
+tests/test_opencode_feasibility.py::test_14_required_endpoints_exist_and_version_is_reported PASSED [ 76%]
+tests/test_opencode_feasibility.py::test_15_model_switch_and_generate_work PASSED [ 80%]
+tests/test_opencode_feasibility.py::test_16_prompt_injection_cannot_widen_permissions PASSED [ 85%]
+tests/test_opencode_feasibility.py::test_17_malicious_tool_names_are_rejected PASSED [ 90%]
+tests/test_opencode_feasibility.py::test_18_runtime_checks_schema_shape_but_not_sizes PASSED [ 95%]
+tests/test_opencode_feasibility.py::test_19_oversized_tool_output_never_reaches_the_model PASSED [100%]
+
+============================= 21 passed in 38.28s ==============================

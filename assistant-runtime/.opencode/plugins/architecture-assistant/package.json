@@ -1,0 +1,5 @@
+{
+  "name": "architecture-assistant-plugin",
+  "private": true,
+  "type": "module"
+}

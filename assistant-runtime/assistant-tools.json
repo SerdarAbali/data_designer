@@ -1,0 +1,12 @@
+{
+  "namespace": "architecture",
+  "description": "Declared Architecture Assistant tool surface for the restricted OpenCode runtime. The startup capability probe reads this manifest and fails closed if any tool is not namespaced, is missing codemode:false, or has no explicit allow rule in assistant-runtime/opencode.json.",
+  "tools": [
+    {
+      "name": "architecture_probe_context",
+      "kind": "probe",
+      "codemode": false,
+      "description": "Startup-probe-only tool. Returns the OpenCode-supplied execution context as bounded, non-sensitive data. It is not connected to the architecture helper API."
+    }
+  ]
+}

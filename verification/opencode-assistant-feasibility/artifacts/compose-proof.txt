@@ -1,0 +1,74 @@
+== building and starting the verification stack (no published ports) ==
+#0 building with "default" instance using docker driver
+
+#1 [opencode internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.22kB done
+#1 DONE 0.0s
+
+#2 [opencode internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [opencode internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [opencode 1/8] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [opencode internal] load build context
+#5 transferring context: 207.33MB 1.3s done
+#5 DONE 1.3s
+
+#6 [opencode 2/8] RUN apt-get update     && apt-get install -y --no-install-recommends ca-certificates     && rm -rf /var/lib/apt/lists/*
+#6 CACHED
+
+#7 [opencode 3/8] COPY opencode /usr/local/bin/opencode
+#7 CACHED
+
+#8 [opencode 6/8] COPY opencode.json /sandbox/opencode.json
+#8 CACHED
+
+#9 [opencode 4/8] RUN chmod +x /usr/local/bin/opencode
+#9 CACHED
+
+#10 [opencode 7/8] COPY plugins /sandbox/.opencode/plugins
+#10 CACHED
+
+#11 [opencode 5/8] RUN mkdir -p /sandbox
+#11 CACHED
+
+#12 [opencode 8/8] WORKDIR /sandbox
+#12 CACHED
+
+#13 [opencode] exporting to image
+#13 exporting layers done
+#13 writing image sha256:31fd79a1697e57204101fd78d42756c38d6069d2a54b143023177a0bddfd848a done
+#13 naming to docker.io/library/archverify-opencode-opencode done
+#13 DONE 0.0s
+ Network archverify-opencode_verify  Creating
+ Network archverify-opencode_verify  Created
+ Container archverify-opencode-opencode-1  Creating
+ Container archverify-opencode-opencode-1  Created
+ Container archverify-opencode-probe-1  Creating
+ Container archverify-opencode-probe-1  Created
+ Container archverify-opencode-opencode-1  Starting
+ Container archverify-opencode-opencode-1  Started
+ Container archverify-opencode-opencode-1  Waiting
+ Container archverify-opencode-opencode-1  Healthy
+ Container archverify-opencode-probe-1  Starting
+ Container archverify-opencode-probe-1  Started
+
+== published port check (host must see nothing) ==
+published_host_ports=0
+host_can_connect_to_127.0.0.1:4096=no
+
+== waiting for the in-network probe to finish ==
+probe_container_state=exited
+
+== in-network probe output (service-name reachability + auth) ==
+--- reach opencode by service name ---
+{"version":"2.0.30","pid":1,"urls":["http://127.0.0.1:4096","http://172.25.0.2:4096"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}
+--- unauthenticated request must fail ---
+status=401
+
+RESULT: PASS - OpenCode is private to the Compose network; sibling container reached it by service name; unauthenticated access is rejected; host cannot reach it

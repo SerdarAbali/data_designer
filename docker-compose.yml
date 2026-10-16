@@ -15,15 +15,57 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # Private, pinned OpenCode runtime for the Architecture Assistant.
+  # It publishes NO host port and lives only on the internal `assistant`
+  # network, so the API service is the only client that can reach it.
+  opencode:
+    build:
+      context: ./assistant-runtime
+    expose:
+      - "4096"
+    environment:
+      OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-local-development-only}
+    volumes:
+      # Sensitive OpenCode data directory: transcripts, spilled tool output,
+      # runtime state. Bounded volume, never mounted elsewhere, never served.
+      - opencode_data:/data
+    networks:
+      - assistant
+    healthcheck:
+      test: ["CMD", "opencode", "api", "get", "/api/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
   api:
     build:
       context: ./api
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-datadesigner}:${POSTGRES_PASSWORD:-local-development-only}@db:5432/${POSTGRES_DB:-datadesigner}
       COOKIE_SECURE: "false"
+      # Assistant is disabled by default. The OpenCode password is server-side
+      # only and is never exposed to the browser or the web service.
+      ASSISTANT_ENABLED: ${ASSISTANT_ENABLED:-false}
+      ASSISTANT_OPENCODE_BASE_URL: http://opencode:4096
+      ASSISTANT_OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-local-development-only}
+      ASSISTANT_OPENCODE_PROFILE_PATH: /assistant-runtime/opencode.json
+      ASSISTANT_OPENCODE_TOOLS_PATH: /assistant-runtime/assistant-tools.json
+      ASSISTANT_OPENCODE_OPENAPI_SNAPSHOT_PATH: /assistant-runtime/openapi/opencode-2.0.30.json
+    volumes:
+      # Read-only: the profile and tool manifest are validated by the probe.
+      - ./assistant-runtime:/assistant-runtime:ro
     depends_on:
       db:
         condition: service_healthy
+      # Start ordering only. The API must not be gated on OpenCode health, so a
+      # disabled or unavailable assistant never blocks the application.
+      opencode:
+        condition: service_started
+    networks:
+      - default
+      - assistant
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -50,3 +92,10 @@ services:
 
 volumes:
   postgres_data:
+  opencode_data:
+
+networks:
+  default:
+    driver: bridge
+  assistant:
+    driver: bridge

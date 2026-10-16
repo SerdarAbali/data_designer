@@ -1,0 +1,5 @@
+# The OpenCode data directory is sensitive: it holds session transcripts,
+# spilled tool output, and runtime state. It is a bounded Compose volume and is
+# never committed, backed up, or served.
+/data/
+node_modules/
