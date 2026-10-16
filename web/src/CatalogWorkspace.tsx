@@ -10,6 +10,7 @@ import ArchitectureImportDialog from "./components/import/ArchitectureImportDial
 import type { NavigationGuard } from "./contextSaveQueue";
 import useStudioTheme from "./useStudioTheme";
 import { ApiError, api, csrfToken, list } from "./apiClient";
+import { AssistantLauncher, AssistantPanel } from "./assistant/AssistantPanel";
 
 type System = {
   id: string;
@@ -129,6 +130,10 @@ export default function CatalogWorkspace({
     contractGuard.current = guard;
   }, []);
   const [activeView, setActiveView] = React.useState<"canvas" | "catalog" | "integrations">("canvas");
+  const [assistantOpen, setAssistantOpen] = React.useState(false);
+  const [architectureStates, setArchitectureStates] = React.useState<
+    { id: string; name: string; state_type: string }[]
+  >([]);
   const [activeWorkspace, setActiveWorkspace] = React.useState<WorkspaceInfo | null>(null);
   const [integrationToOpen, setIntegrationToOpen] = React.useState("");
   const [integrationPhaseToOpen, setIntegrationPhaseToOpen] = React.useState<
@@ -216,6 +221,27 @@ export default function CatalogWorkspace({
   React.useEffect(() => {
     void refreshWorkspace().catch(() => {});
   }, [refreshWorkspace]);
+
+  React.useEffect(() => {
+    const workspaceId = activeWorkspace?.id;
+    if (!workspaceId) {
+      setArchitectureStates([]);
+      return;
+    }
+    let cancelled = false;
+    void list<{ id: string; name: string; state_type: string }>(
+      `/api/workspaces/${workspaceId}/states`,
+    )
+      .then((states) => {
+        if (!cancelled) setArchitectureStates(states);
+      })
+      .catch(() => {
+        if (!cancelled) setArchitectureStates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace?.id]);
 
   const refreshObjects = React.useCallback(async (currentSystemId: string, preferId?: string) => {
     const requestId = ++objectsRequest.current;
@@ -653,6 +679,7 @@ export default function CatalogWorkspace({
             }} />
           </label>
           <button type="button" className="studio-icon-button" aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} onClick={toggleTheme}>{theme === "light" ? "☾" : "☀"}</button>
+          <AssistantLauncher open={assistantOpen} onOpen={() => setAssistantOpen(true)} />
           <button type="button" className="studio-share" onClick={() => void exportWorkspace()} disabled={saving || transitioning || !activeWorkspace} title="Export this workspace as a shareable bundle">Share</button>
           <details className="workspace-account">
             <summary aria-label="Account menu">
@@ -952,6 +979,16 @@ export default function CatalogWorkspace({
           }}
         />
       )}
+      <AssistantPanel
+        workspaceId={activeWorkspace?.id ?? null}
+        workspaceName={activeWorkspace?.name ?? tenantName}
+        disciplines={activeWorkspace?.disciplines ?? []}
+        states={architectureStates}
+        workbenchView={activeView}
+        selectionIds={[]}
+        open={assistantOpen}
+        onClose={() => setAssistantOpen(false)}
+      />
     </main>
   );
 }

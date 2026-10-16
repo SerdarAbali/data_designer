@@ -45,6 +45,9 @@ class Workspace(Base):
         DateTime(timezone=True), nullable=True
     )
     demo_assets: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
+    assistant_enabled: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

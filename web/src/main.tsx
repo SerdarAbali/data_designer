@@ -6,6 +6,7 @@ import "@xyflow/react/dist/style.css";
 import "./styles/tokens.css";
 import "./style.css";
 import "./styles/studio.css";
+import "./assistant/assistant.css";
 
 type CurrentUser = {
   email: string;

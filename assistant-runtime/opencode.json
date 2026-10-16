@@ -42,11 +42,21 @@
           "resource": "*",
           "effect": "deny"
         },
-        {
-          "action": "architecture_probe_context",
-          "resource": "*",
-          "effect": "allow"
-        }
+        { "action": "architecture_get_workspace_context", "resource": "*", "effect": "allow" },
+        { "action": "architecture_get_enabled_disciplines", "resource": "*", "effect": "allow" },
+        { "action": "architecture_get_architecture_state", "resource": "*", "effect": "allow" },
+        { "action": "architecture_search_canonical_objects", "resource": "*", "effect": "allow" },
+        { "action": "architecture_get_object_details", "resource": "*", "effect": "allow" },
+        { "action": "architecture_get_object_relationships", "resource": "*", "effect": "allow" },
+        { "action": "architecture_get_object_usages", "resource": "*", "effect": "allow" },
+        { "action": "architecture_trace_architecture_path", "resource": "*", "effect": "allow" },
+        { "action": "architecture_compare_current_candidate", "resource": "*", "effect": "allow" },
+        { "action": "architecture_list_catalog_systems", "resource": "*", "effect": "allow" },
+        { "action": "architecture_inspect_catalog_schema", "resource": "*", "effect": "allow" },
+        { "action": "architecture_list_integration_contracts", "resource": "*", "effect": "allow" },
+        { "action": "architecture_inspect_contract", "resource": "*", "effect": "allow" },
+        { "action": "architecture_inspect_mapping_coverage", "resource": "*", "effect": "allow" },
+        { "action": "architecture_inspect_scenarios_and_conformance", "resource": "*", "effect": "allow" }
       ]
     },
     "build": {

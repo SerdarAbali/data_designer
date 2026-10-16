@@ -327,3 +327,14 @@ class OpenCodeRuntime:
                 "OpenCode response is missing the expected data envelope",
             )
         return payload["data"]
+
+
+def build_runtime() -> OpenCodeRuntime:
+    """Construct the production runtime from settings.
+
+    A single override point so tests can supply a deterministic fake without a
+    live OpenCode server.
+    """
+    from app.assistant.settings import settings as assistant_settings
+
+    return OpenCodeRuntime(assistant_settings)

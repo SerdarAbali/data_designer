@@ -59,6 +59,10 @@ class AssistantSettings(BaseSettings):
     opencode_tools_path: str = DEFAULT_TOOLS_PATH
     opencode_openapi_snapshot_path: str = DEFAULT_OPENAPI_SNAPSHOT_PATH
 
+    tool_service_token: SecretStr = SecretStr("")
+    """Static service token the OpenCode plugin presents to the internal tool
+    dispatch endpoint. Empty means internal dispatch is refused (fail closed)."""
+
     connect_timeout_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
     stream_timeout_seconds: float = 30.0
@@ -115,6 +119,12 @@ class AssistantSettings(BaseSettings):
 
     def has_password(self) -> bool:
         return bool(self.password())
+
+    def service_token(self) -> str:
+        return self.tool_service_token.get_secret_value()
+
+    def has_service_token(self) -> bool:
+        return bool(self.service_token())
 
     def resolve_path(self, configured: str) -> Path:
         path = Path(configured)

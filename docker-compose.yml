@@ -25,6 +25,8 @@ services:
       - "4096"
     environment:
       OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-local-development-only}
+      ARCHITECTURE_BACKEND_URL: http://api:8000
+      ARCHITECTURE_SERVICE_TOKEN: ${ASSISTANT_TOOL_SERVICE_TOKEN:-local-development-only}
     volumes:
       # Sensitive OpenCode data directory: transcripts, spilled tool output,
       # runtime state. Bounded volume, never mounted elsewhere, never served.
@@ -50,6 +52,7 @@ services:
       ASSISTANT_ENABLED: ${ASSISTANT_ENABLED:-false}
       ASSISTANT_OPENCODE_BASE_URL: http://opencode:4096
       ASSISTANT_OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-local-development-only}
+      ASSISTANT_TOOL_SERVICE_TOKEN: ${ASSISTANT_TOOL_SERVICE_TOKEN:-local-development-only}
       ASSISTANT_OPENCODE_PROFILE_PATH: /assistant-runtime/opencode.json
       ASSISTANT_OPENCODE_TOOLS_PATH: /assistant-runtime/assistant-tools.json
       ASSISTANT_OPENCODE_OPENAPI_SNAPSHOT_PATH: /assistant-runtime/openapi/opencode-2.0.30.json

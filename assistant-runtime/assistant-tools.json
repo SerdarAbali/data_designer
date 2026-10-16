@@ -1,12 +1,21 @@
 {
   "namespace": "architecture",
-  "description": "Declared Architecture Assistant tool surface for the restricted OpenCode runtime. The startup capability probe reads this manifest and fails closed if any tool is not namespaced, is missing codemode:false, or has no explicit allow rule in assistant-runtime/opencode.json.",
+  "description": "Declared Architecture Assistant tool surface for the restricted OpenCode runtime. The startup capability probe reads this manifest and fails closed if any tool is not namespaced, is missing codemode:false, or has no explicit allow rule in assistant-runtime/opencode.json. Every tool is read-only and dispatches to the backend's authoritative read-helper registry.",
   "tools": [
-    {
-      "name": "architecture_probe_context",
-      "kind": "probe",
-      "codemode": false,
-      "description": "Startup-probe-only tool. Returns the OpenCode-supplied execution context as bounded, non-sensitive data. It is not connected to the architecture helper API."
-    }
+    { "name": "architecture_get_workspace_context", "kind": "read", "codemode": false },
+    { "name": "architecture_get_enabled_disciplines", "kind": "read", "codemode": false },
+    { "name": "architecture_get_architecture_state", "kind": "read", "codemode": false },
+    { "name": "architecture_search_canonical_objects", "kind": "read", "codemode": false },
+    { "name": "architecture_get_object_details", "kind": "read", "codemode": false },
+    { "name": "architecture_get_object_relationships", "kind": "read", "codemode": false },
+    { "name": "architecture_get_object_usages", "kind": "read", "codemode": false },
+    { "name": "architecture_trace_architecture_path", "kind": "read", "codemode": false },
+    { "name": "architecture_compare_current_candidate", "kind": "read", "codemode": false },
+    { "name": "architecture_list_catalog_systems", "kind": "read", "codemode": false },
+    { "name": "architecture_inspect_catalog_schema", "kind": "read", "codemode": false },
+    { "name": "architecture_list_integration_contracts", "kind": "read", "codemode": false },
+    { "name": "architecture_inspect_contract", "kind": "read", "codemode": false },
+    { "name": "architecture_inspect_mapping_coverage", "kind": "read", "codemode": false },
+    { "name": "architecture_inspect_scenarios_and_conformance", "kind": "read", "codemode": false }
   ]
 }

@@ -21,6 +21,16 @@ from app.models.architecture_object import (
     SolutionMember,
     TrustBoundary,
 )
+from app.models.assistant import (
+    CONVERSATION_STATUSES,
+    MESSAGE_ROLES,
+    MESSAGE_STATUSES,
+    TOOL_CALL_STATUSES,
+    AssistantConversation,
+    AssistantEvent,
+    AssistantMessage,
+    AssistantToolCall,
+)
 from app.models.auth import AuthSession, Tenant, User
 from app.models.catalog import CatalogField, CatalogObject, CatalogSystem
 from app.models.helper_action import (
@@ -41,6 +51,10 @@ __all__ = [
     "ArchitecturePrinciple",
     "ArchitectureRelationship",
     "ArchitectureStateMember",
+    "AssistantConversation",
+    "AssistantEvent",
+    "AssistantMessage",
+    "AssistantToolCall",
     "AuthSession",
     "BusinessCapability",
     "BusinessGoal",
@@ -50,6 +64,7 @@ __all__ = [
     "CatalogObject",
     "CatalogSystem",
     "CHANGE_SET_STATUSES",
+    "CONVERSATION_STATUSES",
     "DataRepository",
     "DeploymentNode",
     "HelperAuditEvent",
@@ -63,12 +78,15 @@ __all__ = [
     "InformationAttribute",
     "InformationObject",
     "InterfaceOperation",
+    "MESSAGE_ROLES",
+    "MESSAGE_STATUSES",
     "OrganizationRole",
     "Scenario",
     "SolutionBoundary",
     "SolutionComponent",
     "SolutionMember",
     "Tenant",
+    "TOOL_CALL_STATUSES",
     "TrustBoundary",
     "User",
     "Workspace",
