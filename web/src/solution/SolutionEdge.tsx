@@ -9,6 +9,8 @@ import {
 export type SolutionEdgeData = {
   kind: string;
   label: string;
+  sourceOffset?: { x: number; y: number };
+  targetOffset?: { x: number; y: number };
 };
 
 export type SolutionFlowEdge = Edge<SolutionEdgeData, "solutionEdge">;
@@ -33,12 +35,14 @@ export default function SolutionEdge({
   selected,
   data,
 }: EdgeProps<SolutionFlowEdge>) {
+  const sourceOffset = data?.sourceOffset ?? { x: 0, y: 0 };
+  const targetOffset = data?.targetOffset ?? { x: 0, y: 0 };
   const [path, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
+    sourceX: sourceX + sourceOffset.x,
+    sourceY: sourceY + sourceOffset.y,
     sourcePosition,
-    targetX,
-    targetY,
+    targetX: targetX + targetOffset.x,
+    targetY: targetY + targetOffset.y,
     targetPosition,
   });
   const color = KIND_COLORS[data?.kind ?? ""] ?? "var(--color-border-strong)";

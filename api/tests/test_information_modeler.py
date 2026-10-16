@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,6 +17,8 @@ from app.models import (
     CatalogField,
     CatalogObject,
     InformationAttribute,
+    Integration,
+    IntegrationFieldRef,
     Tenant,
     User,
 )
@@ -578,3 +581,474 @@ def test_candidate_relationship_handle_changes_do_not_affect_current(client):
         edge = db.get(ArchitectureRelationship, UUID(relationship_id))
         assert (edge.properties or {}).get("source_handle") == "s-bottom"
         assert (edge.properties or {}).get("target_handle") == "t-left"
+
+
+# --- Information Architecture completion projections -------------------------
+
+
+def _catalog_field(
+    test_client,
+    headers,
+    system_name="CRM",
+    object_name="customer",
+    field_name="email",
+    data_type="string",
+):
+    system = test_client.post(
+        "/api/catalog/systems", json={"name": system_name, "kind": "service"}, headers=headers
+    ).json()
+    catalog_object = test_client.post(
+        f"/api/catalog/systems/{system['id']}/objects",
+        json={"name": object_name, "label": object_name.title()},
+        headers=headers,
+    ).json()
+    field = test_client.post(
+        f"/api/catalog/objects/{catalog_object['id']}/fields",
+        json={"name": field_name, "data_type": data_type},
+        headers=headers,
+    ).json()
+    return system, catalog_object, field
+
+
+def _add_attribute(
+    test_client, headers, workspace_id, state_id, entity_id, name, data_type="string", **extra
+):
+    response = test_client.post(
+        f"/api/workspaces/{workspace_id}/information/entities/{entity_id}/attributes",
+        json={"state_id": state_id, "name": name, "data_type": data_type, **extra},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _realize(test_client, headers, workspace_id, state_id, attribute_id, field_id):
+    response = test_client.put(
+        f"/api/workspaces/{workspace_id}/information/attributes/{attribute_id}/realization",
+        json={"state_id": state_id, "catalog_field_id": field_id},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_conceptual_projection_hides_technical_detail(client):
+    test_client, _ = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    customer = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Customer", {"x": 40, "y": 40}
+    )
+    order = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Order", {"x": 380, "y": 40}
+    )
+    customer_id = customer["entity"]["object_id"]
+    order_id = order["entity"]["object_id"]
+    _add_attribute(test_client, headers, workspace_id, candidate["id"], customer_id, "customer_id")
+    test_client.post(
+        f"/api/workspaces/{workspace_id}/information/relationships",
+        json={
+            "state_id": candidate["id"],
+            "source_object_id": customer_id,
+            "target_object_id": order_id,
+            "cardinality": "one_to_many",
+            "name": "places",
+        },
+        headers=headers,
+    )
+
+    conceptual = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/conceptual",
+        params={"state_id": candidate["id"]},
+    ).json()
+    assert {concept["name"] for concept in conceptual["concepts"]} == {"Customer", "Order"}
+    for concept in conceptual["concepts"]:
+        assert set(concept) == {"object_id", "name", "description", "owner"}
+        assert "attributes" not in concept
+        assert "data_type" not in concept
+    assert len(conceptual["relationships"]) == 1
+    relationship = conceptual["relationships"][0]
+    assert set(relationship) == {
+        "id",
+        "source_object_id",
+        "target_object_id",
+        "name",
+        "cardinality",
+    }
+    assert relationship["cardinality"] == "one_to_many"
+
+
+def test_physical_projection_reuses_catalog_field_ids(client):
+    test_client, testing_sessions = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    system, catalog_object, email_field = _catalog_field(
+        test_client, headers, system_name="CRM", object_name="customer", field_name="email"
+    )
+    integer_field = test_client.post(
+        f"/api/catalog/objects/{catalog_object['id']}/fields",
+        json={"name": "balance", "data_type": "integer"},
+        headers=headers,
+    ).json()
+
+    entity = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Customer", {"x": 40, "y": 40}
+    )
+    entity_id = entity["entity"]["object_id"]
+    email = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "email"
+    )
+    balance = _add_attribute(
+        test_client,
+        headers,
+        workspace_id,
+        candidate["id"],
+        entity_id,
+        "balance",
+        data_type="decimal",
+    )
+    _add_attribute(test_client, headers, workspace_id, candidate["id"], entity_id, "phone")
+
+    _realize(
+        test_client, headers, workspace_id, candidate["id"], email["object_id"], email_field["id"]
+    )
+    _realize(
+        test_client,
+        headers,
+        workspace_id,
+        candidate["id"],
+        balance["object_id"],
+        integer_field["id"],
+    )
+
+    physical = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/physical",
+        params={"state_id": candidate["id"]},
+    ).json()
+    by_name = {mapping["attribute_name"]: mapping for mapping in physical["mappings"]}
+
+    # Existing catalog ids are reused verbatim; nothing is copied or duplicated.
+    assert by_name["email"]["catalog_field_id"] == email_field["id"]
+    assert by_name["email"]["catalog_object_id"] == email_field["object_id"]
+    assert by_name["email"]["system_id"] == system["id"]
+    assert by_name["email"]["system_name"] == "CRM"
+    assert by_name["email"]["status"] == "realized"
+    assert by_name["balance"]["status"] == "partial"
+    assert by_name["phone"]["status"] == "unmapped"
+    assert by_name["phone"]["catalog_field_id"] is None
+    assert physical["summary"] == {"realized": 1, "partial": 1, "unmapped": 1, "invalid": 0}
+
+    with testing_sessions() as db:
+        assert len(list(db.scalars(select(CatalogField)))) == 2
+        assert len(list(db.scalars(select(CatalogObject)))) == 1
+
+    # A realization that points at a removed catalog field is reported invalid,
+    # not silently dropped.
+    with testing_sessions.begin() as db:
+        field = db.get(CatalogField, UUID(email_field["id"]))
+        field.deleted_at = datetime.now(UTC)
+    invalidated = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/physical",
+        params={"state_id": candidate["id"]},
+    ).json()
+    invalid_by_name = {mapping["attribute_name"]: mapping for mapping in invalidated["mappings"]}
+    assert invalid_by_name["email"]["status"] == "invalid"
+    assert invalidated["summary"]["invalid"] == 1
+
+
+def test_ownership_projection_reports_missing_governance(client):
+    test_client, testing_sessions = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    system = test_client.post(
+        "/api/catalog/systems", json={"name": "CRM", "kind": "service"}, headers=headers
+    ).json()
+
+    governed = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Governed", {"x": 40, "y": 40}
+    )
+    test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/entities/{governed['entity']['object_id']}",
+        json={
+            "owner": "Customer Ops",
+            "steward": "Data Steward",
+            "authoritative_system_id": system["id"],
+            "classification": "internal",
+            "sensitivity": "low",
+        },
+        headers=headers,
+    )
+    _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Ungoverned", {"x": 340, "y": 40}
+    )
+    sensitive = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Sensitive", {"x": 640, "y": 40}
+    )
+    test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/entities/{sensitive['entity']['object_id']}",
+        json={"owner": "Risk", "sensitivity": "high"},
+        headers=headers,
+    )
+
+    # Place CRM on the candidate canvas so the authority resolves as present.
+    with testing_sessions.begin() as db:
+        state = db.get(ArchitectureState, UUID(candidate["id"]))
+        state.nodes = [
+            *state.nodes,
+            {
+                "occurrence_id": f"occ-{system['id']}",
+                "object_id": system["id"],
+                "position": {"x": 0, "y": 0},
+                "discipline": "information",
+            },
+        ]
+
+    ownership = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/ownership",
+        params={"state_id": candidate["id"]},
+    ).json()
+    by_name = {entry["name"]: entry for entry in ownership["entries"]}
+
+    assert by_name["Governed"]["issues"] == []
+    assert by_name["Governed"]["authoritative_in_state"] is True
+    assert by_name["Governed"]["authoritative_system_name"] == "CRM"
+
+    assert {"missing_owner", "missing_steward", "missing_authoritative_system"} <= set(
+        by_name["Ungoverned"]["issues"]
+    )
+    assert "sensitive_without_ownership" in by_name["Sensitive"]["issues"]
+    assert "missing_steward" in by_name["Sensitive"]["issues"]
+
+
+def test_lineage_projection_uses_existing_references_only(client):
+    test_client, testing_sessions = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    crm_system, crm_object, crm_email = _catalog_field(
+        test_client,
+        headers,
+        system_name="CRM",
+        object_name="customer",
+        field_name="email",
+    )
+    crm_phone = test_client.post(
+        f"/api/catalog/objects/{crm_object['id']}/fields",
+        json={"name": "phone", "data_type": "string"},
+        headers=headers,
+    ).json()
+    billing_system, billing_object, billing_email = _catalog_field(
+        test_client,
+        headers,
+        system_name="Billing",
+        object_name="billing_account",
+        field_name="email_address",
+    )
+
+    entity = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Customer", {"x": 40, "y": 40}
+    )
+    entity_id = entity["entity"]["object_id"]
+    email = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "email"
+    )
+    phone = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "phone"
+    )
+    _realize(
+        test_client, headers, workspace_id, candidate["id"], email["object_id"], crm_email["id"]
+    )
+    _realize(
+        test_client, headers, workspace_id, candidate["id"], phone["object_id"], crm_phone["id"]
+    )
+
+    contract_id = uuid4()
+    graph = {
+        "version": 1,
+        "nodes": [
+            {"id": "src", "type": "source", "position": {"x": 0, "y": 0}},
+            {"id": "tgt", "type": "target", "position": {"x": 400, "y": 0}},
+        ],
+        "edges": [
+            {
+                "id": "e1",
+                "sourceNodeId": "src",
+                "sourcePortId": f"field:{crm_email['id']}",
+                "targetNodeId": "tgt",
+                "targetPortId": f"field:{billing_email['id']}",
+            }
+        ],
+    }
+    with testing_sessions.begin() as db:
+        db.add(
+            Integration(
+                id=contract_id,
+                tenant_id=UUID(workspace_id),
+                source_system_id=UUID(crm_system["id"]),
+                source_object_id=UUID(crm_object["id"]),
+                target_system_id=UUID(billing_system["id"]),
+                target_object_id=UUID(billing_object["id"]),
+                name="Customer onboarding (direct)",
+                graph=graph,
+                response_graph={"version": 1, "nodes": [], "edges": []},
+                error_response_graph={"version": 1, "nodes": [], "edges": []},
+            )
+        )
+        db.add(
+            IntegrationFieldRef(
+                id=uuid4(),
+                tenant_id=UUID(workspace_id),
+                integration_id=contract_id,
+                object_id=UUID(crm_object["id"]),
+                field_id=UUID(crm_email["id"]),
+                direction="source",
+            )
+        )
+        db.add(
+            IntegrationFieldRef(
+                id=uuid4(),
+                tenant_id=UUID(workspace_id),
+                integration_id=contract_id,
+                object_id=UUID(billing_object["id"]),
+                field_id=UUID(billing_email["id"]),
+                direction="target",
+            )
+        )
+
+    lineage = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/lineage",
+        params={"state_id": candidate["id"]},
+    ).json()
+    node_ids = {node["id"] for node in lineage["nodes"]}
+    edges = {(edge["source"], edge["target"]): edge["relation"] for edge in lineage["edges"]}
+
+    attribute_key = f"attribute:{email['object_id']}"
+    crm_field_key = f"field:{crm_email['id']}"
+    billing_field_key = f"field:{billing_email['id']}"
+    contract_key = f"contract:{contract_id}"
+    assert attribute_key in node_ids and crm_field_key in node_ids
+    assert billing_field_key in node_ids and contract_key in node_ids
+    assert edges[(attribute_key, crm_field_key)] == "realized as"
+    assert edges[(crm_field_key, contract_key)] == "mapped by"
+    assert edges[(contract_key, billing_field_key)] == "delivered to"
+
+    # The phone attribute is realized but unused by any contract: lineage ends
+    # there and nothing downstream is fabricated.
+    phone_field_key = f"field:{crm_phone['id']}"
+    assert phone_field_key in node_ids
+    assert not any(
+        source == phone_field_key and relation == "mapped by"
+        for (source, _target), relation in edges.items()
+    )
+
+    # An attribute with no realization is reported as a lineage gap.
+    unmapped = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "nickname"
+    )
+    lineage_after = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/lineage",
+        params={"state_id": candidate["id"]},
+    ).json()
+    assert f"attribute:{unmapped['object_id']}" in {node["id"] for node in lineage_after["nodes"]}
+    assert any("Customer.nickname" in gap for gap in lineage_after["gaps"])
+    assert not any(
+        edge["source"] == f"attribute:{unmapped['object_id']}" for edge in lineage_after["edges"]
+    )
+
+
+def test_impact_projection_reports_added_changed_removed_reused(client):
+    test_client, testing_sessions = client
+    headers = csrf_headers(test_client)
+    workspace, current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+
+    _system, _object, field = _catalog_field(
+        test_client, headers, system_name="CRM", object_name="customer", field_name="email"
+    )
+
+    entity = _create_entity(
+        test_client, headers, workspace_id, candidate["id"], "Customer", {"x": 40, "y": 40}
+    )
+    entity_id = entity["entity"]["object_id"]
+    stable = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "email"
+    )
+    changed = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "status"
+    )
+    removed = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "legacy_code"
+    )
+
+    # Promote the entity and three attributes into the Current baseline.
+    with testing_sessions.begin() as db:
+        current_row = db.get(ArchitectureState, UUID(current["id"]))
+        current_row.nodes = [
+            *current_row.nodes,
+            {
+                "occurrence_id": f"occ-{entity_id}",
+                "object_id": entity_id,
+                "position": {"x": 40, "y": 40},
+                "discipline": "information",
+            },
+        ]
+        for attribute_id in (stable["object_id"], changed["object_id"], removed["object_id"]):
+            db.get(InformationAttribute, UUID(attribute_id)).created_in_state_id = None
+
+    # Add a brand new attribute and realize it; rename a baseline attribute;
+    # delete another baseline attribute (excluded in the candidate only).
+    added = _add_attribute(
+        test_client, headers, workspace_id, candidate["id"], entity_id, "consent"
+    )
+    _realize(
+        test_client, headers, workspace_id, candidate["id"], added["object_id"], field["id"]
+    )
+    renamed = test_client.patch(
+        f"/api/workspaces/{workspace_id}/information/attributes/{changed['object_id']}",
+        json={"state_id": candidate["id"], "name": "status_code"},
+        headers=headers,
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert (
+        test_client.delete(
+            f"/api/workspaces/{workspace_id}/information/attributes/{removed['object_id']}",
+            params={"state_id": candidate["id"]},
+            headers=headers,
+        ).status_code
+        == 204
+    )
+
+    impact = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/impact",
+        params={"state_id": candidate["id"]},
+    ).json()
+    assert impact["supported"] is True
+    assert impact["baseline_state_id"] == current["id"]
+
+    changes = {(change["object_type"], change["object_id"]): change for change in impact["changes"]}
+    assert changes[("entity", entity_id)]["change"] == "reused"
+    assert changes[("attribute", stable["object_id"])]["change"] == "reused"
+    assert changes[("attribute", changed["object_id"])]["change"] == "changed"
+    assert "name" in changes[("attribute", changed["object_id"])]["changed_fields"]
+    assert changes[("attribute", added["object_id"])]["change"] == "added"
+    assert changes[("attribute", removed["object_id"])]["change"] == "removed"
+    assert changes[("realization", added["object_id"])]["change"] == "added"
+    assert impact["summary"]["reused"] >= 2
+    assert impact["summary"]["added"] >= 1
+    assert impact["summary"]["removed"] >= 1
+    assert impact["summary"]["changed"] >= 1
+
+    # Candidate work never alters the Current baseline.
+    current_impact = test_client.get(
+        f"/api/workspaces/{workspace_id}/information/impact",
+        params={"state_id": current["id"]},
+    ).json()
+    assert current_impact["baseline_state_id"] == current["id"]
+    assert {change["change"] for change in current_impact["changes"]} <= {"reused"}

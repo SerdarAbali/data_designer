@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -12,11 +13,24 @@ from app.architecture.schemas import (
     InformationAttributeCreate,
     InformationAttributeResponse,
     InformationAttributeUpdate,
+    InformationConcept,
+    InformationConceptRelationship,
+    InformationConceptualResponse,
+    InformationContractRef,
     InformationEntityCreate,
     InformationEntityCreatedResponse,
     InformationEntityResponse,
     InformationEntityUpdate,
+    InformationImpactChange,
+    InformationImpactResponse,
+    InformationLineageEdge,
+    InformationLineageNode,
+    InformationLineageResponse,
     InformationModelResponse,
+    InformationOwnershipEntry,
+    InformationOwnershipResponse,
+    InformationPhysicalMapping,
+    InformationPhysicalResponse,
     InformationRealization,
     InformationRealizationRequest,
     InformationRelationshipCreate,
@@ -62,6 +76,8 @@ from app.models import (
     CatalogSystem,
     InformationAttribute,
     InformationObject,
+    Integration,
+    IntegrationFieldRef,
     Workspace,
 )
 
@@ -956,3 +972,618 @@ def delete_information_relationship(
     db.delete(edge)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Read-only completion projections ----------------------------------------
+#
+# Conceptual, physical-realization, ownership, lineage and impact views are all
+# projections over the canonical information model plus existing catalog and
+# integration rows. They create or mutate nothing and reuse canonical ids; any
+# comparison that cannot be derived is reported as unsupported rather than
+# fabricated.
+
+_ENTITY_COMPARABLE = (
+    "name",
+    "description",
+    "owner",
+    "steward",
+    "authoritative_system_id",
+    "classification",
+    "sensitivity",
+)
+_ATTRIBUTE_COMPARABLE = (
+    "name",
+    "data_type",
+    "required",
+    "nullable",
+    "is_key",
+    "is_identifier",
+    "definition",
+)
+_RELATIONSHIP_COMPARABLE = (
+    "name",
+    "cardinality",
+    "source_optional",
+    "target_optional",
+    "source_handle",
+    "target_handle",
+)
+
+
+def _catalog_field_context(
+    db: Session, field_id: UUID
+) -> tuple[CatalogField | None, CatalogObject | None, CatalogSystem | None]:
+    """Resolve a catalog field to its object and system, treating deleted as missing."""
+    field = db.get(CatalogField, field_id)
+    if field is None or field.deleted_at is not None:
+        return None, None, None
+    catalog_object = db.get(CatalogObject, field.object_id)
+    system = db.get(CatalogSystem, catalog_object.system_id) if catalog_object is not None else None
+    return field, catalog_object, system
+
+
+def _field_contracts(
+    db: Session, workspace: Workspace, field_id: UUID
+) -> list[tuple[Integration, str]]:
+    """Integrations referencing a catalog field, with the reference direction."""
+    refs = db.scalars(
+        select(IntegrationFieldRef).where(
+            IntegrationFieldRef.tenant_id == workspace.tenant_id,
+            IntegrationFieldRef.field_id == field_id,
+        )
+    )
+    seen: dict[UUID, tuple[Integration, str]] = {}
+    for ref in refs:
+        if ref.integration_id in seen:
+            continue
+        integration = db.get(Integration, ref.integration_id)
+        if integration is not None:
+            seen[integration.id] = (integration, ref.direction)
+    return list(seen.values())
+
+
+def _request_graph_flows(graph: dict) -> list[tuple[UUID, UUID, bool]]:
+    """Field-to-field flows proven by a contract request graph.
+
+    Returns ``(source_field_id, target_field_id, transformed)`` triples derived
+    from real node and edge references. ``transformed`` is true when the path
+    passes through a transformation node, so the UI can label it truthfully.
+    """
+    nodes = graph.get("nodes") or []
+    by_id = {node.get("id"): node for node in nodes}
+    source = next((node for node in nodes if node.get("type") == "source"), None)
+    target = next((node for node in nodes if node.get("type") == "target"), None)
+    if source is None or target is None:
+        return []
+    outgoing: dict[str, list[dict]] = defaultdict(list)
+    for edge in graph.get("edges") or []:
+        outgoing[edge.get("sourceNodeId")].append(edge)
+
+    def field_of(port) -> UUID | None:
+        if isinstance(port, str) and port.startswith("field:"):
+            try:
+                return UUID(port.removeprefix("field:"))
+            except ValueError:
+                return None
+        return None
+
+    def is_transform(node_id: str) -> bool:
+        return (by_id.get(node_id) or {}).get("type") not in ("source", "target")
+
+    results: list[tuple[UUID, UUID, bool]] = []
+
+    def walk(node_id: str, source_field: UUID, transformed: bool) -> None:
+        for edge in outgoing.get(node_id, []):
+            nxt = edge.get("targetNodeId")
+            combined = transformed or is_transform(nxt)
+            if nxt == target.get("id"):
+                target_field = field_of(edge.get("targetPortId"))
+                if target_field is not None:
+                    results.append((source_field, target_field, combined))
+            else:
+                walk(nxt, source_field, combined)
+
+    for edge in outgoing.get(source.get("id"), []):
+        source_field = field_of(edge.get("sourcePortId"))
+        if source_field is None:
+            continue
+        nxt = edge.get("targetNodeId")
+        if nxt == target.get("id"):
+            target_field = field_of(edge.get("targetPortId"))
+            if target_field is not None:
+                results.append((source_field, target_field, is_transform(nxt)))
+        else:
+            walk(nxt, source_field, is_transform(nxt))
+    return results
+
+
+@router.get("/conceptual", response_model=InformationConceptualResponse)
+def get_information_conceptual(
+    workspace_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> InformationConceptualResponse:
+    """Business concepts only: no attributes, data types or physical detail."""
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_information(workspace)
+    state = _get_state(db, workspace, state_id)
+    model = _build_model(db, workspace, state)
+    return InformationConceptualResponse(
+        state_id=state.id,
+        concepts=[
+            InformationConcept(
+                object_id=entity.object_id,
+                name=entity.name,
+                description=entity.description,
+                owner=entity.owner,
+            )
+            for entity in model.entities
+        ],
+        relationships=[
+            InformationConceptRelationship(
+                id=relationship.id,
+                source_object_id=relationship.source_object_id,
+                target_object_id=relationship.target_object_id,
+                name=relationship.name,
+                cardinality=relationship.cardinality,
+            )
+            for relationship in model.relationships
+        ],
+    )
+
+
+@router.get("/physical", response_model=InformationPhysicalResponse)
+def get_information_physical(
+    workspace_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> InformationPhysicalResponse:
+    """Logical-to-physical realization derived from existing realizations."""
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_information(workspace)
+    state = _get_state(db, workspace, state_id)
+    model = _build_model(db, workspace, state)
+
+    summary = {"realized": 0, "partial": 0, "unmapped": 0, "invalid": 0}
+    mappings: list[InformationPhysicalMapping] = []
+    for entity in model.entities:
+        for attribute in entity.attributes:
+            realization = attribute.realization
+            status = "unmapped"
+            system_id = system_name = None
+            catalog_object_id = catalog_object_name = None
+            catalog_field_id = catalog_field_name = None
+            contracts: list[InformationContractRef] = []
+            if realization is not None and realization.catalog_field_id is not None:
+                field, catalog_object, system = _catalog_field_context(
+                    db, realization.catalog_field_id
+                )
+                if field is None:
+                    status = "invalid"
+                else:
+                    catalog_field_id = field.id
+                    catalog_field_name = field.name
+                    catalog_object_id = field.object_id
+                    catalog_object_name = catalog_object.name if catalog_object else None
+                    system_id = system.id if system else None
+                    system_name = system.name if system else None
+                    status = "partial" if field.data_type != attribute.data_type else "realized"
+                    if system is not None:
+                        contracts = [
+                            InformationContractRef(
+                                id=integration.id, name=integration.name, direction=direction
+                            )
+                            for integration, direction in _field_contracts(db, workspace, field.id)
+                        ]
+            summary[status] += 1
+            mappings.append(
+                InformationPhysicalMapping(
+                    entity_object_id=entity.object_id,
+                    entity_name=entity.name,
+                    attribute_object_id=attribute.object_id,
+                    attribute_name=attribute.name,
+                    data_type=attribute.data_type,
+                    required=attribute.required,
+                    status=status,
+                    system_id=system_id,
+                    system_name=system_name,
+                    catalog_object_id=catalog_object_id,
+                    catalog_object_name=catalog_object_name,
+                    catalog_field_id=catalog_field_id,
+                    catalog_field_name=catalog_field_name,
+                    contracts=contracts,
+                )
+            )
+    return InformationPhysicalResponse(state_id=state.id, mappings=mappings, summary=summary)
+
+
+def _ownership_issues(
+    entity: InformationEntityResponse, systems: list[str], in_state: bool
+) -> list[str]:
+    issues: list[str] = []
+    if not entity.owner:
+        issues.append("missing_owner")
+    if not entity.steward:
+        issues.append("missing_steward")
+    if not entity.authoritative_system_id:
+        issues.append("missing_authoritative_system")
+    elif not in_state:
+        issues.append("authoritative_not_in_state")
+    if len(systems) > 1:
+        issues.append("multiple_authoritative_sources")
+    sensitive = bool(
+        entity.sensitivity and entity.sensitivity.strip().lower() not in ("", "none", "low")
+    )
+    if sensitive and (not entity.owner or not entity.steward):
+        issues.append("sensitive_without_ownership")
+    return issues
+
+
+@router.get("/ownership", response_model=InformationOwnershipResponse)
+def get_information_ownership(
+    workspace_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> InformationOwnershipResponse:
+    """Ownership and authority facts plus provable governance gaps."""
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_information(workspace)
+    state = _get_state(db, workspace, state_id)
+    model = _build_model(db, workspace, state)
+    state_object_ids = {str(node.get("object_id")) for node in state.nodes}
+
+    entries: list[InformationOwnershipEntry] = []
+    for entity in model.entities:
+        systems: list[str] = []
+        if entity.authoritative_system_name and entity.authoritative_system_name not in systems:
+            systems.append(entity.authoritative_system_name)
+        realization_count = 0
+        for attribute in entity.attributes:
+            realization = attribute.realization
+            if realization is None or realization.catalog_field_id is None:
+                continue
+            realization_count += 1
+            _field, _object, system = _catalog_field_context(db, realization.catalog_field_id)
+            if system is not None and system.name not in systems:
+                systems.append(system.name)
+        in_state = bool(
+            entity.authoritative_system_id
+            and str(entity.authoritative_system_id) in state_object_ids
+        )
+        entries.append(
+            InformationOwnershipEntry(
+                object_id=entity.object_id,
+                name=entity.name,
+                owner=entity.owner,
+                steward=entity.steward,
+                authoritative_system_id=entity.authoritative_system_id,
+                authoritative_system_name=entity.authoritative_system_name,
+                authoritative_in_state=in_state,
+                classification=entity.classification,
+                sensitivity=entity.sensitivity,
+                realization_count=realization_count,
+                systems=systems,
+                issues=_ownership_issues(entity, systems, in_state),
+            )
+        )
+    return InformationOwnershipResponse(state_id=state.id, entries=entries)
+
+
+@router.get("/lineage", response_model=InformationLineageResponse)
+def get_information_lineage(
+    workspace_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> InformationLineageResponse:
+    """Lineage built only from proven realization and contract references."""
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_information(workspace)
+    state = _get_state(db, workspace, state_id)
+    model = _build_model(db, workspace, state)
+
+    nodes: dict[str, InformationLineageNode] = {}
+    edges: list[InformationLineageEdge] = []
+    gaps: list[str] = []
+
+    def add_node(node: InformationLineageNode) -> None:
+        nodes.setdefault(node.id, node)
+
+    def add_edge(source: str, target: str, relation: str) -> None:
+        edges.append(
+            InformationLineageEdge(
+                id=f"{source}->{target}:{relation}", source=source, target=target, relation=relation
+            )
+        )
+
+    def add_field(
+        field: CatalogField,
+        catalog_object: CatalogObject | None,
+        system: CatalogSystem | None,
+    ) -> str:
+        key = f"field:{field.id}"
+        add_node(
+            InformationLineageNode(
+                id=key,
+                kind="catalog_field",
+                name=field.name,
+                detail=catalog_object.name if catalog_object is not None else None,
+                system_name=system.name if system is not None else None,
+                catalog_field_id=field.id,
+            )
+        )
+        if system is not None:
+            system_key = f"system:{system.id}"
+            add_node(
+                InformationLineageNode(
+                    id=system_key, kind="catalog_system", name=system.name, system_name=system.name
+                )
+            )
+            add_edge(key, system_key, "sourced from")
+        return key
+
+    for entity in model.entities:
+        entity_key = f"entity:{entity.object_id}"
+        for attribute in entity.attributes:
+            attribute_key = f"attribute:{attribute.object_id}"
+            label = f"{entity.name}.{attribute.name}"
+            add_node(
+                InformationLineageNode(id=entity_key, kind="information_entity", name=entity.name)
+            )
+            add_node(
+                InformationLineageNode(
+                    id=attribute_key,
+                    kind="information_attribute",
+                    name=label,
+                    detail=attribute.data_type,
+                )
+            )
+            add_edge(entity_key, attribute_key, "has attribute")
+
+            realization = attribute.realization
+            if realization is None or realization.catalog_field_id is None:
+                gaps.append(f"{label} has no physical realization")
+                continue
+            field, catalog_object, system = _catalog_field_context(db, realization.catalog_field_id)
+            if field is None:
+                gaps.append(f"{label} references a missing catalog field")
+                continue
+            field_key = add_field(field, catalog_object, system)
+            add_edge(attribute_key, field_key, "realized as")
+
+            for integration, _direction in _field_contracts(db, workspace, field.id):
+                contract_key = f"contract:{integration.id}"
+                add_node(
+                    InformationLineageNode(
+                        id=contract_key,
+                        kind="contract",
+                        name=integration.name,
+                        contract_id=integration.id,
+                    )
+                )
+                add_edge(field_key, contract_key, "mapped by")
+                for source_field_id, target_field_id, transformed in _request_graph_flows(
+                    integration.graph or {}
+                ):
+                    if source_field_id != field.id:
+                        continue
+                    target_field, target_object, target_system = _catalog_field_context(
+                        db, target_field_id
+                    )
+                    if target_field is None:
+                        gaps.append(f"{integration.name} maps to a missing catalog field")
+                        continue
+                    target_key = add_field(target_field, target_object, target_system)
+                    relation = "transformed by" if transformed else "delivered to"
+                    add_edge(contract_key, target_key, relation)
+
+    return InformationLineageResponse(
+        state_id=state.id, nodes=list(nodes.values()), edges=edges, gaps=gaps
+    )
+
+
+def _build_information_impact(
+    db: Session,
+    state: ArchitectureState,
+    candidate: InformationModelResponse,
+    baseline: InformationModelResponse | None,
+    baseline_state: ArchitectureState | None,
+) -> InformationImpactResponse:
+    if baseline is None or baseline_state is None:
+        return InformationImpactResponse(
+            state_id=state.id,
+            baseline_state_id=None,
+            supported=False,
+            changes=[],
+            unresolved=["No Current baseline state is available for comparison."],
+            summary={},
+        )
+
+    changes: list[InformationImpactChange] = []
+    unresolved: list[str] = []
+    base_entities = {entity.object_id: entity for entity in baseline.entities}
+    cand_entities = {entity.object_id: entity for entity in candidate.entities}
+
+    for object_id, entity in cand_entities.items():
+        base = base_entities.get(object_id)
+        if base is None:
+            changes.append(
+                InformationImpactChange(
+                    object_type="entity", object_id=object_id, name=entity.name, change="added"
+                )
+            )
+            continue
+        changed = [f for f in _ENTITY_COMPARABLE if getattr(entity, f) != getattr(base, f)]
+        changes.append(
+            InformationImpactChange(
+                object_type="entity",
+                object_id=object_id,
+                name=entity.name,
+                change="changed" if changed else "reused",
+                changed_fields=changed,
+                reason="entity properties changed" if changed else None,
+            )
+        )
+    for object_id, base in base_entities.items():
+        if object_id not in cand_entities:
+            changes.append(
+                InformationImpactChange(
+                    object_type="entity", object_id=object_id, name=base.name, change="removed"
+                )
+            )
+
+    for object_id, entity in cand_entities.items():
+        base = base_entities.get(object_id)
+        base_attributes = {a.object_id: a for a in (base.attributes if base is not None else [])}
+        for attribute in entity.attributes:
+            prior = base_attributes.get(attribute.object_id)
+            if prior is None:
+                changes.append(
+                    InformationImpactChange(
+                        object_type="attribute",
+                        object_id=attribute.object_id,
+                        name=attribute.name,
+                        entity_object_id=object_id,
+                        entity_name=entity.name,
+                        change="added",
+                    )
+                )
+            else:
+                changed = [
+                    f for f in _ATTRIBUTE_COMPARABLE if getattr(attribute, f) != getattr(prior, f)
+                ]
+                changes.append(
+                    InformationImpactChange(
+                        object_type="attribute",
+                        object_id=attribute.object_id,
+                        name=attribute.name,
+                        entity_object_id=object_id,
+                        entity_name=entity.name,
+                        change="changed" if changed else "reused",
+                        changed_fields=changed,
+                        reason="attribute properties changed" if changed else None,
+                    )
+                )
+
+            base_field = prior.realization.catalog_field_id if prior and prior.realization else None
+            cand_field = (
+                attribute.realization.catalog_field_id if attribute.realization else None
+            )
+            if cand_field != base_field:
+                if base_field is None:
+                    change_type = "added"
+                elif cand_field is None:
+                    change_type = "removed"
+                else:
+                    change_type = "changed"
+                reason = "physical realization changed"
+                if cand_field is not None and _catalog_field_context(db, cand_field)[0] is None:
+                    reason = "physical realization references a missing catalog field"
+                    unresolved.append(
+                        f"{entity.name}.{attribute.name} is realized to a missing catalog field"
+                    )
+                changes.append(
+                    InformationImpactChange(
+                        object_type="realization",
+                        object_id=attribute.object_id,
+                        name=attribute.name,
+                        entity_object_id=object_id,
+                        entity_name=entity.name,
+                        change=change_type,
+                        reason=reason,
+                    )
+                )
+            elif cand_field is not None and _catalog_field_context(db, cand_field)[0] is None:
+                unresolved.append(
+                    f"{entity.name}.{attribute.name} realization references a missing catalog field"
+                )
+
+    for object_id, base in base_entities.items():
+        candidate_entity = cand_entities.get(object_id)
+        candidate_attributes = candidate_entity.attributes if candidate_entity is not None else []
+        cand_attribute_ids = {a.object_id for a in candidate_attributes}
+        for attribute in base.attributes:
+            if attribute.object_id not in cand_attribute_ids:
+                changes.append(
+                    InformationImpactChange(
+                        object_type="attribute",
+                        object_id=attribute.object_id,
+                        name=attribute.name,
+                        entity_object_id=object_id,
+                        entity_name=base.name,
+                        change="removed",
+                    )
+                )
+
+    base_relationships = {r.id: r for r in baseline.relationships}
+    cand_relationships = {r.id: r for r in candidate.relationships}
+    for relationship_id, relationship in cand_relationships.items():
+        prior = base_relationships.get(relationship_id)
+        if prior is None:
+            changes.append(
+                InformationImpactChange(
+                    object_type="relationship",
+                    object_id=relationship_id,
+                    name=relationship.name or "relationship",
+                    change="added",
+                )
+            )
+            continue
+        changed = [
+            f
+            for f in _RELATIONSHIP_COMPARABLE
+            if getattr(relationship, f) != getattr(prior, f)
+        ]
+        changes.append(
+            InformationImpactChange(
+                object_type="relationship",
+                object_id=relationship_id,
+                name=relationship.name or "relationship",
+                change="changed" if changed else "reused",
+                changed_fields=changed,
+                reason="relationship properties changed" if changed else None,
+            )
+        )
+    for relationship_id, prior in base_relationships.items():
+        if relationship_id not in cand_relationships:
+            changes.append(
+                InformationImpactChange(
+                    object_type="relationship",
+                    object_id=relationship_id,
+                    name=prior.name or "relationship",
+                    change="removed",
+                )
+            )
+
+    summary = {
+        label: sum(1 for change in changes if change.change == label)
+        for label in ("added", "removed", "changed", "reused")
+    }
+    return InformationImpactResponse(
+        state_id=state.id,
+        baseline_state_id=baseline_state.id,
+        supported=True,
+        changes=changes,
+        unresolved=unresolved,
+        summary=summary,
+    )
+
+
+@router.get("/impact", response_model=InformationImpactResponse)
+def get_information_impact(
+    workspace_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> InformationImpactResponse:
+    """Current-vs-selected-state comparison over the canonical information model."""
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_information(workspace)
+    state = _get_state(db, workspace, state_id)
+    candidate = _build_model(db, workspace, state)
+    baseline_state = _current_state(db, workspace)
+    baseline = _build_model(db, workspace, baseline_state) if baseline_state else None
+    return _build_information_impact(db, state, candidate, baseline, baseline_state)

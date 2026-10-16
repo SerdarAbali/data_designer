@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,9 +9,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import main
+from app.architecture.schemas import EnterpriseObjectCreate, EnterpriseObjectResponse
 from app.auth.security import hash_password
 from app.db import Base, get_session
-from app.models import Tenant, User
+from app.models import ArchitectureRelationship, ArchitectureState, Tenant, User, Workspace
 
 DEMO_PATH = (
     Path(__file__).resolve().parents[2] / "fixtures" / "enterprise-architecture" / "demo.json"
@@ -115,6 +116,43 @@ def _link(test_client, headers, workspace_id, state_id, relationship_type, sourc
 
 def _group(model, group, name):
     return next(item for item in model[group] if item["name"] == name)
+
+
+def _append_node(sessions, state_id, object_ids):
+    with sessions.begin() as db:
+        state = db.get(ArchitectureState, UUID(str(state_id)))
+        state.nodes = [
+            *state.nodes,
+            *[
+                {
+                    "occurrence_id": f"occ-{object_id}",
+                    "object_id": str(object_id),
+                    "position": {"x": 0.0, "y": 0.0},
+                    "discipline": "enterprise",
+                    "parent_occurrence_id": None,
+                    "width": None,
+                    "height": None,
+                    "display_metadata": {},
+                    "candidate_overrides": {},
+                }
+                for object_id in object_ids
+            ],
+        ]
+
+
+def _insert_relationship(sessions, tenant_id, source, target, relationship_type, state_id):
+    with sessions.begin() as db:
+        db.add(
+            ArchitectureRelationship(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                source_object_id=UUID(str(source)),
+                target_object_id=UUID(str(target)),
+                relationship_type=relationship_type,
+                properties={},
+                created_in_state_id=UUID(str(state_id)) if state_id else None,
+            )
+        )
 
 
 def test_enterprise_object_crud_and_isolation(client):
@@ -552,6 +590,196 @@ def test_enterprise_delete_link(client):
     assert removed.json()["links"] == []
 
 
+def test_enterprise_relationship_state_filtering(client):
+    test_client, sessions = client
+    headers = csrf_headers(test_client)
+    workspace, current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+    with sessions() as db:
+        tenant_id = db.get(Workspace, UUID(workspace_id)).tenant_id
+
+    def create(kind, name, **kw):
+        model = _create_object(
+            test_client, headers, workspace_id, candidate["id"], kind, name, **kw
+        )
+        group = {
+            "goal": "goals",
+            "requirement": "requirements",
+            "capability": "capabilities",
+            "process": "processes",
+            "principle": "principles",
+            "role": "roles",
+        }[kind]
+        return _group(model, group, name)["object_id"]
+
+    goal = create("goal", "Connected goal")
+    requirement = create("requirement", "Connected requirement")
+    capability = create("capability", "Connected capability")
+    process = create("process", "Connected process")
+    principle = create("principle", "Connected principle", principle_type="constraint")
+    role = create("role", "Connected role", role_type="role")
+
+    # Expose the authored objects in Current too so canonical (NULL-scoped)
+    # relationships are resolvable there.
+    _append_node(
+        sessions, current["id"], [goal, requirement, capability, process, principle, role]
+    )
+
+    # Canonical baseline relationships: visible in every state.
+    _insert_relationship(sessions, tenant_id, goal, requirement, "drives", None)
+    _insert_relationship(sessions, tenant_id, requirement, capability, "needs", None)
+    _insert_relationship(sessions, tenant_id, capability, process, "has_process", None)
+    _insert_relationship(sessions, tenant_id, capability, principle, "governed_by", None)
+    _insert_relationship(sessions, tenant_id, process, principle, "governed_by", None)
+    _insert_relationship(sessions, tenant_id, capability, role, "owned_by", None)
+
+    for state in (current, candidate):
+        state_id = state["id"]
+        model = test_client.get(
+            f"{_discipline(workspace_id)}/model", params={"state_id": state_id}
+        ).json()
+        types = {link["relationship_type"] for link in model["links"]}
+        assert {"drives", "needs", "has_process", "governed_by", "owned_by"} <= types
+
+        trace = test_client.get(
+            f"{_discipline(workspace_id)}/strategy-trace", params={"state_id": state_id}
+        ).json()
+        chain = next(item for item in trace["chains"] if item["goal"]["name"] == "Connected goal")
+        assert [step["requirement"]["name"] for step in chain["steps"]] == [
+            "Connected requirement"
+        ]
+
+        capability_map = test_client.get(
+            f"{_discipline(workspace_id)}/capability-map", params={"state_id": state_id}
+        ).json()
+        entry = next(
+            item
+            for item in capability_map["capabilities"]
+            if item["capability"]["name"] == "Connected capability"
+        )
+        assert [item["name"] for item in entry["processes"]] == ["Connected process"]
+        assert entry["owner_role"]["name"] == "Connected role"
+
+        process_impact = test_client.get(
+            f"{_discipline(workspace_id)}/process-impact", params={"state_id": state_id}
+        ).json()
+        impacted = next(
+            item
+            for item in process_impact["processes"]
+            if item["process"]["name"] == "Connected process"
+        )
+        assert [item["name"] for item in impacted["capabilities"]] == ["Connected capability"]
+        assert [item["name"] for item in impacted["governed_by"]] == ["Connected principle"]
+
+        application_support = test_client.get(
+            f"{_discipline(workspace_id)}/application-support", params={"state_id": state_id}
+        ).json()
+        assert application_support["applications"] == []
+
+
+def test_enterprise_relationship_candidate_scoping(client):
+    test_client, sessions = client
+    headers = csrf_headers(test_client)
+    workspace, current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+    with sessions() as db:
+        tenant_id = db.get(Workspace, UUID(workspace_id)).tenant_id
+
+    model = _create_object(
+        test_client, headers, workspace_id, candidate["id"], "goal", "Shared goal"
+    )
+    shared_goal = _group(model, "goals", "Shared goal")["object_id"]
+    model = _create_object(
+        test_client, headers, workspace_id, candidate["id"], "requirement", "Shared requirement"
+    )
+    shared_requirement = _group(model, "requirements", "Shared requirement")["object_id"]
+    model = _create_object(
+        test_client, headers, workspace_id, candidate["id"], "goal", "Candidate-only goal"
+    )
+    scoped_goal = _group(model, "goals", "Candidate-only goal")["object_id"]
+    model = _create_object(
+        test_client,
+        headers,
+        workspace_id,
+        candidate["id"],
+        "requirement",
+        "Candidate-only requirement",
+    )
+    scoped_requirement = _group(model, "requirements", "Candidate-only requirement")["object_id"]
+
+    _append_node(
+        sessions,
+        current["id"],
+        [shared_goal, shared_requirement, scoped_goal, scoped_requirement],
+    )
+    _insert_relationship(sessions, tenant_id, shared_goal, shared_requirement, "drives", None)
+    _insert_relationship(
+        sessions, tenant_id, scoped_goal, scoped_requirement, "drives", candidate["id"]
+    )
+
+    def drives_pairs(state_id):
+        model = test_client.get(
+            f"{_discipline(workspace_id)}/model", params={"state_id": state_id}
+        ).json()
+        return {
+            (link["source_object_id"], link["target_object_id"])
+            for link in model["links"]
+            if link["relationship_type"] == "drives"
+        }
+
+    current_pairs = drives_pairs(current["id"])
+    candidate_pairs = drives_pairs(candidate["id"])
+    assert (shared_goal, shared_requirement) in current_pairs
+    assert (shared_goal, shared_requirement) in candidate_pairs
+    assert (scoped_goal, scoped_requirement) not in current_pairs
+    assert (scoped_goal, scoped_requirement) in candidate_pairs
+
+
+def test_enterprise_relationships_do_not_leak_between_candidates(client):
+    test_client, sessions = client
+    headers = csrf_headers(test_client)
+    workspace, current, candidate = _workspace_with_candidate(test_client, headers)
+    workspace_id = workspace["id"]
+    with sessions() as db:
+        tenant_id = db.get(Workspace, UUID(workspace_id)).tenant_id
+
+    other_candidate = test_client.post(
+        f"/api/workspaces/{workspace_id}/states/{current['id']}/duplicate",
+        json={"target_name": "Second Candidate"},
+        headers=headers,
+    ).json()
+
+    model = _create_object(
+        test_client, headers, workspace_id, candidate["id"], "capability", "Leak capability"
+    )
+    capability = _group(model, "capabilities", "Leak capability")["object_id"]
+    model = _create_object(
+        test_client, headers, workspace_id, candidate["id"], "process", "Leak process"
+    )
+    process = _group(model, "processes", "Leak process")["object_id"]
+
+    _append_node(sessions, candidate["id"], [capability, process])
+    _append_node(sessions, other_candidate["id"], [capability, process])
+
+    _insert_relationship(
+        sessions, tenant_id, capability, process, "has_process", other_candidate["id"]
+    )
+
+    def has_process_pairs(state_id):
+        model = test_client.get(
+            f"{_discipline(workspace_id)}/model", params={"state_id": state_id}
+        ).json()
+        return {
+            (link["source_object_id"], link["target_object_id"])
+            for link in model["links"]
+            if link["relationship_type"] == "has_process"
+        }
+
+    assert (capability, process) in has_process_pairs(other_candidate["id"])
+    assert (capability, process) not in has_process_pairs(candidate["id"])
+    assert (capability, process) not in has_process_pairs(current["id"])
+
+
 def test_enterprise_demo_fixture_shape():
     assert DEMO_PATH.exists(), f"missing enterprise demo fixture at {DEMO_PATH}"
     demo = json.loads(DEMO_PATH.read_text())
@@ -559,3 +787,22 @@ def test_enterprise_demo_fixture_shape():
     assert {"goal", "requirement", "capability", "process", "principle", "role"} <= kinds
     relationship_types = {link["relationship_type"] for link in demo["links"]}
     assert {"drives", "needs", "has_process", "supports", "satisfies"} <= relationship_types
+
+    # Every demo object validates against both the request and response schemas
+    # (this is what rejects out-of-enum values such as role_type="team").
+    state_id = uuid4()
+    for obj in demo["objects"]:
+        EnterpriseObjectCreate(
+            state_id=state_id,
+            kind=obj["kind"],
+            name=obj["name"],
+            description=obj.get("description"),
+            owner=obj.get("owner"),
+            outcome_metric=obj.get("outcome_metric"),
+            horizon=obj.get("horizon"),
+            process_type=obj.get("process_type"),
+            principle_type=obj.get("principle_type"),
+            rationale=obj.get("rationale"),
+            role_type=obj.get("role_type"),
+        )
+        EnterpriseObjectResponse.model_validate({**obj, "object_id": uuid4()})

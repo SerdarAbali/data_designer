@@ -478,12 +478,14 @@ def build_integration(db, ctx: DemoContext) -> None:
     )
     db.flush()
     # Current state tells the "existing/manual" story; candidate adds the event flow.
+    # The relationship type is shown on the canvas as "<type> · <contract>", so it
+    # reflects how the contract moves data rather than a blanket "Consumes".
     ctx.add_state_relationship(
         "current",
         "current.legacy",
         ctx.id("system.crm"),
         ctx.id("system.billing"),
-        "Consumes",
+        "Uses",
         name="Legacy customer export",
         integration_id=legacy_id,
     )
@@ -492,7 +494,7 @@ def build_integration(db, ctx: DemoContext) -> None:
         "candidate.direct",
         ctx.id("system.crm"),
         ctx.id("system.billing"),
-        "Consumes",
+        "Uses",
         name="Customer onboarding (direct)",
         integration_id=direct_id,
     )

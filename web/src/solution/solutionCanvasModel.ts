@@ -1,4 +1,5 @@
 import type { ArchitectureState, ArchitectureStateNode } from "../architectureTypes";
+import { chooseHandles, handleId, type Rect } from "../components/architecture/architectureRouting";
 import type {
   SolutionComponent,
   SolutionDesign,
@@ -16,7 +17,22 @@ export const SOLUTION_NODE_SIZES = {
   repository: { width: 210, height: 78 },
 } as const;
 
+const LAYOUT = {
+  originX: 80,
+  originY: 80,
+  systemGapX: 60,
+  systemGapY: 48,
+  componentGapX: 140,
+  componentGapY: 60,
+  repositoryGapY: 56,
+  externalGapY: 80,
+  laneSpacing: 26,
+  boundaryPad: { left: 44, right: 44, top: 56, bottom: 44 },
+} as const;
+
 export type Point = { x: number; y: number };
+
+export type LayoutOptions = { auto?: boolean };
 
 export type PlacedSystem = {
   key: string;
@@ -34,6 +50,8 @@ export type GraphEdge = {
   target: string;
   sourceHandle?: string | null;
   targetHandle?: string | null;
+  sourceOffset?: Point;
+  targetOffset?: Point;
   kind: "member" | "external" | "connects_to" | "uses" | "relationship";
   label: string;
 };
@@ -58,6 +76,7 @@ export type DecompositionComponent = {
   component: SolutionComponent;
   occurrenceId: string;
   position: Point;
+  height: number;
   provided: SolutionInterface[];
   required: SolutionInterface[];
 };
@@ -110,26 +129,108 @@ function stateNodesByObject(state: ArchitectureState | null): Map<string, Archit
   return map;
 }
 
-function envelope(points: Point[], fallback: Point): { position: Point; width: number; height: number } {
-  if (points.length === 0) {
-    return {
-      position: fallback,
-      width: SOLUTION_NODE_SIZES.boundary.width,
-      height: SOLUTION_NODE_SIZES.boundary.height,
-    };
+/** A saved layout is usable when at least one placed node has a real position. */
+export function hasUsableLayout(positions: Point[]): boolean {
+  if (positions.length === 0) return true;
+  return !positions.every((point) => point.x === 0 && point.y === 0);
+}
+
+export function componentNodeHeight(component: SolutionComponent): number {
+  let height = 74;
+  if (component.responsibility) height += 16;
+  for (const ui of component.interfaces) {
+    height += 30;
+    height += ui.operations.length * 18;
   }
-  const padX = 60;
-  const padTop = 78;
-  const padBottom = 64;
-  const minX = Math.min(...points.map((point) => point.x)) - padX;
-  const minY = Math.min(...points.map((point) => point.y)) - padTop;
-  const maxX = Math.max(...points.map((point) => point.x + SOLUTION_NODE_SIZES.system.width)) + padX;
-  const maxY = Math.max(...points.map((point) => point.y + SOLUTION_NODE_SIZES.system.height)) + padBottom;
+  return Math.max(SOLUTION_NODE_SIZES.component.height, height + 12);
+}
+
+function systemRect(position: Point, width: number, height: number): Rect {
+  return { x: position.x, y: position.y, width, height };
+}
+
+function rectsOverlap(a: Rect, b: Rect, gap = 0): boolean {
+  return (
+    a.x < b.x + b.width + gap &&
+    a.x + a.width + gap > b.x &&
+    a.y < b.y + b.height + gap &&
+    a.y + a.height + gap > b.y
+  );
+}
+
+/** Pushes a rectangle down until it clears every already-placed rectangle. */
+function resolveVerticalOverlap(rect: Rect, placed: Rect[]): Rect {
+  let next = rect;
+  let guard = 0;
+  while (placed.some((other) => rectsOverlap(next, other, 24)) && guard < 200) {
+    const colliders = placed.filter((other) => rectsOverlap(next, other, 24));
+    next = { ...next, y: Math.max(...colliders.map((other) => other.y + other.height)) + LAYOUT.repositoryGapY };
+    guard += 1;
+  }
+  return next;
+}
+
+function autoLayoutRow(count: number, width: number, height: number, origin: Point, gapX: number, gapY: number): Point[] {
+  const perRow = Math.max(1, Math.min(count, 4));
+  return Array.from({ length: count }, (_, index) => ({
+    x: origin.x + (index % perRow) * (width + gapX),
+    y: origin.y + Math.floor(index / perRow) * (height + gapY),
+  }));
+}
+
+function boundaryFrame(rects: Rect[]): { position: Point; width: number; height: number } {
+  const pad = LAYOUT.boundaryPad;
+  if (rects.length === 0) {
+    return { position: { x: LAYOUT.originX, y: LAYOUT.originY }, width: 300, height: 180 };
+  }
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
   return {
-    position: { x: minX, y: minY },
-    width: Math.max(SOLUTION_NODE_SIZES.boundary.width, maxX - minX),
-    height: Math.max(SOLUTION_NODE_SIZES.boundary.height, maxY - minY),
+    position: { x: minX - pad.left, y: minY - pad.top },
+    width: maxX + pad.right - (minX - pad.left),
+    height: maxY + pad.bottom - (minY - pad.top),
   };
+}
+
+function perpendicular(side: string): Point {
+  return side === "left" || side === "right" ? { x: 0, y: 1 } : { x: 1, y: 0 };
+}
+
+function sideOf(handle: string | null | undefined): string {
+  if (!handle) return "right";
+  return handle.split("-")[1] ?? "right";
+}
+
+/**
+ * Routes each relationship between distinct handle pairs and spreads parallel
+ * connectors that share a handle into separate lanes so they stay legible.
+ */
+function applyLaneOffsets(edges: GraphEdge[]): void {
+  const sourceGroups = new Map<string, GraphEdge[]>();
+  const targetGroups = new Map<string, GraphEdge[]>();
+  for (const edge of edges) {
+    if (!edge.sourceHandle || !edge.targetHandle) continue;
+    const sourceKey = `${edge.source}|${edge.sourceHandle}`;
+    const targetKey = `${edge.target}|${edge.targetHandle}`;
+    sourceGroups.set(sourceKey, [...(sourceGroups.get(sourceKey) ?? []), edge]);
+    targetGroups.set(targetKey, [...(targetGroups.get(targetKey) ?? []), edge]);
+  }
+  for (const group of sourceGroups.values()) {
+    group.forEach((edge, index) => {
+      const offset = (index - (group.length - 1) / 2) * LAYOUT.laneSpacing;
+      const dir = perpendicular(sideOf(edge.sourceHandle));
+      edge.sourceOffset = { x: dir.x * offset, y: dir.y * offset };
+    });
+  }
+  for (const group of targetGroups.values()) {
+    group.forEach((edge, index) => {
+      const offset = (index - (group.length - 1) / 2) * LAYOUT.laneSpacing;
+      const dir = perpendicular(sideOf(edge.targetHandle));
+      edge.targetOffset = { x: dir.x * offset, y: dir.y * offset };
+    });
+  }
 }
 
 function placeSystem(
@@ -137,15 +238,10 @@ function placeSystem(
   name: string,
   kind: string,
   external: boolean,
-  index: number,
   nodes: Map<string, ArchitectureStateNode>,
   fallback: Point,
 ): PlacedSystem {
   const node = nodes.get(systemId);
-  const position = node?.position ?? {
-    x: fallback.x + index * (SOLUTION_NODE_SIZES.system.width + 40),
-    y: fallback.y,
-  };
   return {
     key: systemOccurrenceId(systemId, node?.occurrence_id ?? null),
     systemId,
@@ -153,87 +249,111 @@ function placeSystem(
     name,
     kind,
     external,
-    position: { x: position.x, y: position.y },
+    position: node?.position ? { x: node.position.x, y: node.position.y } : { x: fallback.x, y: fallback.y },
   };
 }
 
-export function contextGraph(design: SolutionDesign, state: ArchitectureState | null): ContextGraph {
+export function contextGraph(
+  design: SolutionDesign,
+  state: ArchitectureState | null,
+  options: LayoutOptions = {},
+): ContextGraph {
   const nodes = stateNodesByObject(state);
+  const memberIds = design.solution.members.map((member) => member.system_id);
+  const savedMemberPositions = memberIds
+    .map((id) => nodes.get(id)?.position)
+    .filter((position): position is Point => Boolean(position));
+  const autoMembers = options.auto || !hasUsableLayout(savedMemberPositions);
+
+  const memberFallbacks = autoLayoutRow(
+    memberIds.length,
+    SOLUTION_NODE_SIZES.system.width,
+    SOLUTION_NODE_SIZES.system.height,
+    { x: LAYOUT.originX, y: LAYOUT.originY },
+    LAYOUT.systemGapX,
+    LAYOUT.systemGapY,
+  );
   const members = design.solution.members.map((member, index) =>
     placeSystem(
       member.system_id,
       member.name,
       member.kind,
       false,
-      index,
-      nodes,
-      { x: design.solution.position.x + 40, y: design.solution.position.y + 70 },
+      autoMembers ? new Map() : nodes,
+      memberFallbacks[index] ?? { x: LAYOUT.originX, y: LAYOUT.originY },
     ),
   );
-  const externalSystems = design.solution.external_systems.map((system, index) =>
+
+  const memberRects = members.map((member) =>
+    systemRect(member.position, SOLUTION_NODE_SIZES.system.width, SOLUTION_NODE_SIZES.system.height),
+  );
+  const frame = boundaryFrame(memberRects);
+
+  const externalIds = design.solution.external_systems.map((system) => system.system_id);
+  const savedExternalPositions = externalIds
+    .map((id) => nodes.get(id)?.position)
+    .filter((position): position is Point => Boolean(position));
+  const autoExternals = options.auto || !hasUsableLayout(savedExternalPositions);
+  const externalFallbacks = autoLayoutRow(
+    externalIds.length,
+    SOLUTION_NODE_SIZES.system.width,
+    SOLUTION_NODE_SIZES.system.height,
+    { x: frame.position.x + LAYOUT.boundaryPad.left, y: frame.position.y + frame.height + LAYOUT.externalGapY },
+    LAYOUT.systemGapX,
+    LAYOUT.systemGapY,
+  );
+  const externals = design.solution.external_systems.map((system, index) =>
     placeSystem(
       system.system_id,
       system.name,
       system.kind,
       true,
-      index,
-      nodes,
-      { x: design.solution.position.x + 40, y: design.solution.position.y + 260 },
+      autoExternals ? new Map() : nodes,
+      externalFallbacks[index] ?? externalFallbacks[0] ?? { x: LAYOUT.originX, y: LAYOUT.originY },
     ),
   );
-  const systems = [...members, ...externalSystems];
+  const systems = [...members, ...externals];
 
-  const memberKeys = new Set(members.map((member) => member.key));
+  const boundaryKey = design.solution.occurrence_id || `solution-${design.solution.solution_object_id}`;
   const nodeKeys = new Map<string, string>();
   for (const system of systems) nodeKeys.set(system.systemId, system.key);
+  const rectByKey = new Map<string, Rect>();
+  for (const system of systems) {
+    rectByKey.set(
+      system.key,
+      systemRect(system.position, SOLUTION_NODE_SIZES.system.width, SOLUTION_NODE_SIZES.system.height),
+    );
+  }
+  if (rectByKey.has(boundaryKey)) rectByKey.delete(boundaryKey);
 
+  // Visual containment already communicates membership, so only genuine
+  // semantic relationships are drawn.
   const edges: GraphEdge[] = [];
-  for (const member of members) {
-    edges.push({
-      id: `member-${member.systemId}`,
-      source: design.solution.occurrence_id || `solution-${design.solution.solution_object_id}`,
-      target: member.key,
-      kind: "member",
-      label: "member",
-    });
-  }
-  for (const external of externalSystems) {
-    edges.push({
-      id: `external-${external.systemId}`,
-      source: external.key,
-      target: design.solution.occurrence_id || `solution-${design.solution.solution_object_id}`,
-      kind: "external",
-      label: "external",
-    });
-  }
-
-  // Real state relationships that touch the solution, a member or an external
-  // system are surfaced as labelled dependency edges.
-  const boundaryKey = design.solution.occurrence_id || `solution-${design.solution.solution_object_id}`;
-  const known = new Set<string>([boundaryKey, ...systems.map((system) => system.key)]);
   for (const relationship of state?.relationships ?? []) {
     const source = resolveOccurrenceKey(relationship.source_id, state, nodeKeys, boundaryKey);
     const target = resolveOccurrenceKey(relationship.target_id, state, nodeKeys, boundaryKey);
     if (!source || !target || source === target) continue;
-    if (!known.has(source) || !known.has(target)) continue;
-    if (edges.some((edge) => edge.source === source && edge.target === target && edge.kind !== "relationship")) continue;
+    const sourceRect = rectByKey.get(source);
+    const targetRect = rectByKey.get(target);
+    if (!sourceRect || !targetRect) continue;
+    const handles = chooseHandles(sourceRect, targetRect);
     edges.push({
       id: `rel-${relationship.id}`,
       source,
       target,
+      sourceHandle: handleId("source", handles.source),
+      targetHandle: handleId("target", handles.target),
       kind: "relationship",
       label: relationship.type,
     });
   }
-
-  const memberPoints = members.map((member) => member.position);
-  const frame = envelope(memberPoints, design.solution.position);
+  applyLaneOffsets(edges);
 
   return {
     boundary: {
       id: boundaryKey,
       occurrenceId: design.solution.occurrence_id,
-      position: design.solution.position,
+      position: frame.position,
       width: frame.width,
       height: frame.height,
       label: design.solution.name,
@@ -255,33 +375,151 @@ function resolveOccurrenceKey(
   return nodeKeys.get(objectId) ?? null;
 }
 
+function dependencyOrder(components: DecompositionComponent[], links: SolutionLink[]): Map<string, number> {
+  const targetsBySource = new Map<string, string[]>();
+  const incoming = new Map<string, number>();
+  for (const item of components) incoming.set(item.component.object_id, 0);
+  for (const link of links) {
+    if (link.relationship_type !== "connects_to") continue;
+    const sourceOwner = components.find((item) =>
+      item.component.interfaces.some((ui) => ui.object_id === link.source_object_id),
+    );
+    const targetOwner = components.find((item) =>
+      item.component.interfaces.some((ui) => ui.object_id === link.target_object_id),
+    );
+    if (!sourceOwner || !targetOwner || sourceOwner === targetOwner) continue;
+    const list = targetsBySource.get(sourceOwner.component.object_id) ?? [];
+    list.push(targetOwner.component.object_id);
+    targetsBySource.set(sourceOwner.component.object_id, list);
+    incoming.set(targetOwner.component.object_id, (incoming.get(targetOwner.component.object_id) ?? 0) + 1);
+  }
+  const depth = new Map<string, number>();
+  const queue = components
+    .map((item) => item.component.object_id)
+    .filter((id) => (incoming.get(id) ?? 0) === 0);
+  for (const id of queue) depth.set(id, 0);
+  let cursor = 0;
+  while (cursor < queue.length) {
+    const current = queue[cursor];
+    cursor += 1;
+    for (const next of targetsBySource.get(current) ?? []) {
+      depth.set(next, Math.max(depth.get(next) ?? 0, (depth.get(current) ?? 0) + 1));
+      incoming.set(next, (incoming.get(next) ?? 0) - 1);
+      if ((incoming.get(next) ?? 0) === 0) queue.push(next);
+    }
+  }
+  // Any node left in a cycle gets a stable trailing column.
+  let fallback = Math.max(0, ...[...depth.values()]) + 1;
+  for (const item of components) {
+    if (!depth.has(item.component.object_id)) {
+      depth.set(item.component.object_id, fallback);
+      fallback += 1;
+    }
+  }
+  return depth;
+}
+
+function autoLayoutComponents(components: DecompositionComponent[], links: SolutionLink[]): Point[] {
+  const positions = new Map<string, Point>();
+  const hasDependencies = links.some((link) => link.relationship_type === "connects_to");
+  if (!hasDependencies) {
+    components.forEach((item, index) => {
+      positions.set(item.component.object_id, {
+        x: LAYOUT.originX + index * (SOLUTION_NODE_SIZES.component.width + LAYOUT.componentGapX),
+        y: LAYOUT.originY,
+      });
+    });
+    return components.map((item) => positions.get(item.component.object_id)!);
+  }
+  const depth = dependencyOrder(components, links);
+  const columnCursor = new Map<number, number>();
+  for (const item of components) {
+    const column = depth.get(item.component.object_id) ?? 0;
+    const y = columnCursor.get(column) ?? LAYOUT.originY;
+    positions.set(item.component.object_id, {
+      x: LAYOUT.originX + column * (SOLUTION_NODE_SIZES.component.width + LAYOUT.componentGapX),
+      y,
+    });
+    columnCursor.set(column, y + item.height + LAYOUT.componentGapY);
+  }
+  return components.map((item) => positions.get(item.component.object_id)!);
+}
+
 export function decompositionGraph(
   design: SolutionDesign,
   state: ArchitectureState | null,
+  options: LayoutOptions = {},
 ): DecompositionGraph {
   const nodes = stateNodesByObject(state);
-  const components: DecompositionComponent[] = design.components.map((component) => {
+  const baseComponents: DecompositionComponent[] = design.components.map((component) => {
     const node = nodes.get(component.object_id);
     return {
       key: component.occurrence_id || `comp-${component.object_id}`,
       component,
       occurrenceId: component.occurrence_id,
       position: component.position,
+      height: componentNodeHeight(component),
       provided: component.interfaces.filter((ui) => ui.direction === "provided"),
       required: component.interfaces.filter((ui) => ui.direction === "required"),
     };
   });
 
-  const boundaryKey = design.solution.occurrence_id || `solution-${design.solution.solution_object_id}`;
+  const savedPositions = baseComponents.map((item) => item.position);
+  const usesAutoLayout = options.auto || !hasUsableLayout(savedPositions);
+  const autoPositions = usesAutoLayout ? autoLayoutComponents(baseComponents, design.links) : [];
+  const components: DecompositionComponent[] = baseComponents.map((item, index) => ({
+    ...item,
+    position: usesAutoLayout ? autoPositions[index] ?? item.position : item.position,
+  }));
+
   const componentByObject = new Map(components.map((item) => [item.component.object_id, item]));
   const interfaceOwner = new Map<string, DecompositionComponent>();
   for (const item of components) {
     for (const ui of item.component.interfaces) interfaceOwner.set(ui.object_id, item);
   }
 
+  const repositoryUsage = new Map<string, Set<string>>();
+  for (const link of design.links.filter((item) => item.relationship_type === "uses_repository")) {
+    const owner = componentByObject.get(link.source_object_id) ?? interfaceOwner.get(link.source_object_id);
+    if (!owner) continue;
+    const users = repositoryUsage.get(link.target_object_id) ?? new Set<string>();
+    users.add(owner.component.object_id);
+    repositoryUsage.set(link.target_object_id, users);
+  }
+
+  // Repositories sit below the components that use them; overlapping placements
+  // are pushed down until the node rectangles are clear.
+  const placedRects: Rect[] = components.map((item) =>
+    ({ x: item.position.x, y: item.position.y, width: SOLUTION_NODE_SIZES.component.width, height: item.height }),
+  );
+  const repositories: DecompositionRepository[] = design.repositories.map((repository) => {
+    const usedBy = [...(repositoryUsage.get(repository.object_id) ?? new Set<string>())];
+    const users = usedBy
+      .map((objectId) => componentByObject.get(objectId))
+      .filter((item): item is DecompositionComponent => Boolean(item));
+    const width = SOLUTION_NODE_SIZES.repository.width;
+    if (users.length === 0) {
+      const x = LAYOUT.originX + placedRects.length * 20;
+      const y = Math.max(...placedRects.map((rect) => rect.y + rect.height)) + LAYOUT.repositoryGapY;
+      const rect = resolveVerticalOverlap({ x, y, width, height: SOLUTION_NODE_SIZES.repository.height }, placedRects);
+      placedRects.push(rect);
+      return { key: repositoryNodeKey(repository.object_id), repository, position: { x: rect.x, y: rect.y }, usedBy };
+    }
+    const anchor = users[0];
+    const anchorRect = placedRects.find((rect) => rect.x === anchor.position.x && rect.y === anchor.position.y);
+    const baseX = anchor.position.x + (SOLUTION_NODE_SIZES.component.width - width) / 2;
+    const baseY = anchor.position.y + anchor.height + LAYOUT.repositoryGapY;
+    const rect = resolveVerticalOverlap(
+      { x: baseX, y: baseY, width, height: SOLUTION_NODE_SIZES.repository.height },
+      placedRects.filter((candidate) => candidate !== anchorRect),
+    );
+    placedRects.push(rect);
+    return { key: repositoryNodeKey(repository.object_id), repository, position: { x: rect.x, y: rect.y }, usedBy };
+  });
+
+  const boundaryKey = design.solution.occurrence_id || `solution-${design.solution.solution_object_id}`;
   const edges: GraphEdge[] = [];
 
-  // Provided/required connections and the component dependency they imply.
   for (const link of design.links.filter((item) => item.relationship_type === "connects_to")) {
     const source = interfaceOwner.get(link.source_object_id);
     const target = interfaceOwner.get(link.target_object_id);
@@ -298,33 +536,6 @@ export function decompositionGraph(
       label: `${sourceInterface?.name ?? "required"} → ${targetInterface?.name ?? "provided"}`,
     });
   }
-
-  // Repository satellite nodes, placed next to the components that use them.
-  const repositoryUsage = new Map<string, Set<string>>();
-  for (const link of design.links.filter((item) => item.relationship_type === "uses_repository")) {
-    const owner = componentByObject.get(link.source_object_id) ?? interfaceOwner.get(link.source_object_id);
-    if (!owner) continue;
-    const users = repositoryUsage.get(link.target_object_id) ?? new Set<string>();
-    users.add(owner.component.object_id);
-    repositoryUsage.set(link.target_object_id, users);
-  }
-
-  const repositories: DecompositionRepository[] = design.repositories.map((repository, index) => {
-    const usedBy = [...(repositoryUsage.get(repository.object_id) ?? new Set<string>())];
-    const users = usedBy
-      .map((objectId) => componentByObject.get(objectId))
-      .filter((item): item is DecompositionComponent => Boolean(item));
-    const position: Point = users.length
-      ? {
-          x: users.reduce((sum, item) => sum + item.position.x, 0) / users.length + 40,
-          y: Math.min(...users.map((item) => item.position.y)) + 150 + index * 10,
-        }
-      : {
-          x: design.solution.position.x + 40 + index * (SOLUTION_NODE_SIZES.repository.width + 30),
-          y: design.solution.position.y + frameBottom(components) + 40,
-        };
-    return { key: repositoryNodeKey(repository.object_id), repository, position, usedBy };
-  });
 
   const repositoryByObject = new Map(repositories.map((item) => [item.repository.object_id, item]));
   for (const [repositoryId, users] of repositoryUsage) {
@@ -343,17 +554,35 @@ export function decompositionGraph(
     }
   }
 
-  // External (non-member) catalog systems placed on the solution canvas.
+  const contentBottom = Math.max(
+    ...placedRects.map((rect) => rect.y + rect.height),
+    ...components.map((item) => item.position.y + item.height),
+  );
+  const externalIds = design.solution.external_systems.map((system) => system.system_id);
+  const savedExternalPositions = externalIds
+    .map((id) => nodes.get(id)?.position)
+    .filter((position): position is Point => Boolean(position));
+  const autoExternals = options.auto || !hasUsableLayout(savedExternalPositions);
+  const externalFallbacks = autoLayoutRow(
+    externalIds.length,
+    SOLUTION_NODE_SIZES.system.width,
+    SOLUTION_NODE_SIZES.system.height,
+    { x: LAYOUT.originX, y: contentBottom + LAYOUT.externalGapY },
+    LAYOUT.systemGapX,
+    LAYOUT.systemGapY,
+  );
   const externals = design.solution.external_systems.map((system, index) =>
-    placeSystem(system.system_id, system.name, system.kind, true, index, nodes, {
-      x: design.solution.position.x + 40,
-      y: design.solution.position.y + frameBottom(components) + 180,
-    }),
+    placeSystem(
+      system.system_id,
+      system.name,
+      system.kind,
+      true,
+      autoExternals ? new Map() : nodes,
+      externalFallbacks[index] ?? externalFallbacks[0] ?? { x: LAYOUT.originX, y: contentBottom + LAYOUT.externalGapY },
+    ),
   );
   const externalByObject = new Map(externals.map((item) => [item.systemId, item]));
 
-  // State relationships between components and external systems.
-  const componentByOccurrence = new Map(components.map((item) => [item.occurrenceId, item]));
   for (const relationship of state?.relationships ?? []) {
     const sourceNode = (state?.nodes ?? []).find((node) => node.occurrence_id === relationship.source_id);
     const targetNode = (state?.nodes ?? []).find((node) => node.occurrence_id === relationship.target_id);
@@ -367,24 +596,22 @@ export function decompositionGraph(
       edges.push({ id: `ext-${relationship.id}`, source: sourceComponent.key, target: targetExternal.key, kind: "external", label: relationship.type });
     } else if (targetComponent && sourceExternal) {
       edges.push({ id: `ext-${relationship.id}`, source: sourceExternal.key, target: targetComponent.key, kind: "external", label: relationship.type });
-    } else if (sourceComponent && targetComponent) {
-      const sourceKey = componentByOccurrence.get(sourceComponent.occurrenceId)?.key ?? sourceComponent.key;
-      edges.push({ id: `dep-${relationship.id}`, source: sourceKey, target: targetComponent.key, kind: "external", label: relationship.type });
+    } else if (sourceComponent && targetComponent && sourceComponent !== targetComponent) {
+      edges.push({ id: `dep-${relationship.id}`, source: sourceComponent.key, target: targetComponent.key, kind: "external", label: relationship.type });
     }
   }
 
-  const memberPoints = design.solution.members.map((member) => {
-    const node = nodes.get(member.system_id);
-    return node?.position ?? null;
-  }).filter((point): point is Point => Boolean(point));
-  const componentPoints = components.map((item) => item.position);
-  const frame = envelope(componentPoints.length ? componentPoints : memberPoints, design.solution.position);
+  const contentRects: Rect[] = [
+    ...components.map((item) => ({ x: item.position.x, y: item.position.y, width: SOLUTION_NODE_SIZES.component.width, height: item.height })),
+    ...repositories.map((item) => ({ x: item.position.x, y: item.position.y, width: SOLUTION_NODE_SIZES.repository.width, height: SOLUTION_NODE_SIZES.repository.height })),
+  ];
+  const frame = boundaryFrame(contentRects);
 
   return {
     boundary: {
       id: boundaryKey,
       occurrenceId: design.solution.occurrence_id,
-      position: design.solution.position,
+      position: frame.position,
       width: frame.width,
       height: frame.height,
       label: design.solution.name,
@@ -394,11 +621,6 @@ export function decompositionGraph(
     externals,
     edges,
   };
-}
-
-function frameBottom(components: DecompositionComponent[]): number {
-  if (components.length === 0) return 0;
-  return Math.max(...components.map((item) => item.position.y)) - Math.min(...components.map((item) => item.position.y));
 }
 
 export function deploymentGroups(design: SolutionDesign): DeploymentGroup[] {

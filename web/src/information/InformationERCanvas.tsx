@@ -24,8 +24,17 @@ import {
 const nodeTypes = { informationEntity: InformationEntityNode };
 const edgeTypes = { informationRelationship: InformationRelationshipEdge };
 
-const ENTITY_HALF_WIDTH = 115;
-const ENTITY_HALF_HEIGHT = 60;
+/** Fallbacks used only until React Flow has measured an entity node. */
+const ENTITY_FALLBACK_WIDTH = 230;
+const ENTITY_FALLBACK_HEIGHT = 120;
+
+/** Real on-screen node size (React Flow measurement) with a safe fallback. */
+function nodeSize(node: InformationEntityFlowNode) {
+  return {
+    width: node.measured?.width ?? ENTITY_FALLBACK_WIDTH,
+    height: node.measured?.height ?? ENTITY_FALLBACK_HEIGHT,
+  };
+}
 
 type Props = {
   model: InformationModel;
@@ -54,6 +63,10 @@ type Props = {
   onMoveEntity: (occurrenceId: string, position: { x: number; y: number }) => void;
   onPendingCardinalityChange: (cardinality: InformationCardinality) => void;
   onArrange?: (direction: "ltr" | "ttb") => void;
+  attributeFilter?: string;
+  onAttributeFilterChange?: (value: string) => void;
+  unmappedOnly?: boolean;
+  onUnmappedOnlyChange?: (value: boolean) => void;
 };
 
 export default function InformationERCanvas({
@@ -72,23 +85,39 @@ export default function InformationERCanvas({
   onMoveEntity,
   onPendingCardinalityChange,
   onArrange,
+  attributeFilter = "",
+  onAttributeFilterChange,
+  unmappedOnly = false,
+  onUnmappedOnlyChange,
 }: Props) {
   const [nodes, setNodes] = useState<InformationEntityFlowNode[]>([]);
 
   useEffect(() => {
-    setNodes(model.entities.map((entity) => ({
-      id: entity.occurrence_id,
-      type: "informationEntity" as const,
-      position: entity.position,
-      selected: entity.occurrence_id === selectedEntityId,
-      data: {
-        entity,
-        editable,
-        selectedAttributeId,
-        onSelectAttribute,
-      },
-    })));
-  }, [model.entities, editable, selectedEntityId, selectedAttributeId, onSelectAttribute]);
+    setNodes(
+      model.entities.map((entity) => ({
+        id: entity.occurrence_id,
+        type: "informationEntity" as const,
+        position: entity.position,
+        selected: entity.occurrence_id === selectedEntityId,
+        data: {
+          entity,
+          editable,
+          selectedAttributeId,
+          onSelectAttribute,
+          attributeFilter,
+          unmappedOnly,
+        },
+      })),
+    );
+  }, [
+    model.entities,
+    editable,
+    selectedEntityId,
+    selectedAttributeId,
+    onSelectAttribute,
+    attributeFilter,
+    unmappedOnly,
+  ]);
 
   const edges = useMemo<InformationRelationshipFlowEdge[]>(
     () => {
@@ -107,19 +136,22 @@ export default function InformationERCanvas({
           laneByRelationship.set(relationship.id, { laneIndex: index, laneCount: list.length }));
       }
 
-      const centerByOccurrence = new Map(nodes.map((node) => [
-        node.id,
-        { x: node.position.x + ENTITY_HALF_WIDTH, y: node.position.y + ENTITY_HALF_HEIGHT },
-      ]));
+      const centerByOccurrence = new Map(nodes.map((node) => {
+        const size = nodeSize(node);
+        return [
+          node.id,
+          { x: node.position.x + size.width / 2, y: node.position.y + size.height / 2 },
+        ];
+      }));
 
       return model.relationships.flatMap((relationship) => {
         const source = model.entities.find((entity) => entity.object_id === relationship.source_object_id);
         const target = model.entities.find((entity) => entity.object_id === relationship.target_object_id);
         if (!source || !target) return [];
         const sourceCenter = centerByOccurrence.get(source.occurrence_id)
-          ?? { x: source.position.x + ENTITY_HALF_WIDTH, y: source.position.y + ENTITY_HALF_HEIGHT };
+          ?? { x: source.position.x + ENTITY_FALLBACK_WIDTH / 2, y: source.position.y + ENTITY_FALLBACK_HEIGHT / 2 };
         const targetCenter = centerByOccurrence.get(target.occurrence_id)
-          ?? { x: target.position.x + ENTITY_HALF_WIDTH, y: target.position.y + ENTITY_HALF_HEIGHT };
+          ?? { x: target.position.x + ENTITY_FALLBACK_WIDTH / 2, y: target.position.y + ENTITY_FALLBACK_HEIGHT / 2 };
         const handles = resolveRelationshipHandles(relationship, sourceCenter, targetCenter);
         const lane = laneByRelationship.get(relationship.id) ?? { laneIndex: 0, laneCount: 1 };
         return [{
@@ -212,6 +244,28 @@ export default function InformationERCanvas({
           <span className="information-canvas-count">
             {model.entities.length} entities · {model.relationships.length} relationships
           </span>
+          {onAttributeFilterChange && (
+            <label className="information-attribute-filter">
+              Find attribute
+              <input
+                type="search"
+                value={attributeFilter}
+                placeholder="Attribute name"
+                aria-label="Filter attributes"
+                onChange={(event) => onAttributeFilterChange(event.target.value)}
+              />
+            </label>
+          )}
+          {onUnmappedOnlyChange && (
+            <label className="information-unmapped-toggle">
+              <input
+                type="checkbox"
+                checked={unmappedOnly}
+                onChange={(event) => onUnmappedOnlyChange(event.target.checked)}
+              />
+              Unmapped only
+            </label>
+          )}
           {onArrange && (
             <span className="information-canvas-arrange" role="group" aria-label="Automatic arrangement">
               <button type="button" disabled={!editable} onClick={() => onArrange("ltr")}>

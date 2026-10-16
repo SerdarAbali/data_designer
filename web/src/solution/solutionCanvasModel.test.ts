@@ -5,10 +5,18 @@ import {
   contextGraph,
   decompositionGraph,
   deploymentGroups,
+  hasUsableLayout,
+  componentNodeHeight,
   trustGroups,
   unassignedComponents,
 } from "./solutionCanvasModel";
 import type { SolutionDesign } from "./solutionModel";
+
+type Rect = { x: number; y: number; width: number; height: number };
+
+function overlap(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
 
 const design: SolutionDesign = {
   state_id: "state-1",
@@ -21,7 +29,10 @@ const design: SolutionDesign = {
     description: null,
     owner: "Payments Team",
     position: { x: 0, y: 0 },
-    members: [{ system_id: "sys-1", name: "Core Banking", kind: "service" }],
+    members: [
+      { system_id: "sys-1", name: "Core Banking", kind: "service" },
+      { system_id: "sys-3", name: "Billing", kind: "service" },
+    ],
     external_systems: [{ system_id: "sys-2", name: "Partner Bank", kind: "external" }],
   },
   components: [
@@ -167,50 +178,160 @@ const state: ArchitectureState = {
   state_type: "candidate",
   nodes: [
     { occurrence_id: "occ-sol", object_id: "sol-1", position: { x: 0, y: 0 } },
-    { occurrence_id: "occ-sys-1", object_id: "sys-1", position: { x: 40, y: 70 } },
-    { occurrence_id: "occ-sys-2", object_id: "sys-2", position: { x: 40, y: 320 } },
+    { occurrence_id: "occ-sys-1", object_id: "sys-1", position: { x: 120, y: 140 } },
+    { occurrence_id: "occ-sys-3", object_id: "sys-3", position: { x: 420, y: 140 } },
   ],
-  relationships: [],
+  relationships: [
+    { id: "rel-1", source_id: "occ-sys-1", target_id: "occ-sys-3", type: "Publishes" },
+  ],
   created_at: "",
   updated_at: "",
 };
 
+function insideBoundary(rect: Rect, boundary: { position: { x: number; y: number }; width: number; height: number }): boolean {
+  return (
+    rect.x >= boundary.position.x &&
+    rect.y >= boundary.position.y &&
+    rect.x + rect.width <= boundary.position.x + boundary.width &&
+    rect.y + rect.height <= boundary.position.y + boundary.height
+  );
+}
+
+describe("hasUsableLayout", () => {
+  it("treats an all-origin layout as unusable and a placed layout as usable", () => {
+    expect(hasUsableLayout([])).toBe(true);
+    expect(hasUsableLayout([{ x: 0, y: 0 }, { x: 0, y: 0 }])).toBe(false);
+    expect(hasUsableLayout([{ x: 10, y: 40 }, { x: 0, y: 0 }])).toBe(true);
+  });
+});
+
 describe("contextGraph", () => {
-  it("renders the solution boundary, members inside and external systems outside", () => {
+  it("places members inside the solution boundary and externals outside", () => {
     const graph = contextGraph(design, state);
-    expect(graph.boundary.label).toBe("Payments Platform");
-    const member = graph.systems.find((system) => system.systemId === "sys-1");
-    const external = graph.systems.find((system) => system.systemId === "sys-2");
-    expect(member?.external).toBe(false);
-    expect(external?.external).toBe(true);
-    expect(member?.position).toEqual({ x: 40, y: 70 });
-    expect(graph.edges.some((edge) => edge.kind === "member" && edge.target === member?.key)).toBe(true);
-    expect(graph.edges.some((edge) => edge.kind === "external" && edge.source === external?.key)).toBe(true);
+    const boundary = graph.boundary;
+    const member = graph.systems.find((system) => system.systemId === "sys-1")!;
+    const external = graph.systems.find((system) => system.systemId === "sys-2")!;
+    expect(insideBoundary({ x: member.position.x, y: member.position.y, width: 200, height: 72 }, boundary)).toBe(true);
+    expect(external.position.y).toBeGreaterThanOrEqual(boundary.position.y + boundary.height);
+  });
+
+  it("sizes the boundary around its members with padding", () => {
+    const graph = contextGraph(design, state);
+    const memberXs = graph.systems
+      .filter((system) => !system.external)
+      .map((system) => system.position.x);
+    expect(graph.boundary.position.x).toBeLessThanOrEqual(Math.min(...memberXs) - 40);
+    expect(graph.boundary.position.y).toBeLessThanOrEqual(140 - 40);
+  });
+
+  it("keeps semantic relationships and drops membership lines", () => {
+    const graph = contextGraph(design, state);
+    expect(graph.edges.some((edge) => edge.kind === "relationship" && edge.label === "Publishes")).toBe(true);
+    expect(graph.edges.some((edge) => edge.kind === "member")).toBe(false);
+    expect(graph.edges.some((edge) => edge.kind === "external")).toBe(false);
+  });
+
+  it("preserves a saved manual layout instead of overwriting it", () => {
+    const graph = contextGraph(design, state);
+    expect(graph.systems.find((system) => system.systemId === "sys-1")!.position).toEqual({ x: 120, y: 140 });
+    expect(graph.systems.find((system) => system.systemId === "sys-3")!.position).toEqual({ x: 420, y: 140 });
+  });
+
+  it("auto-arranges members when no usable saved layout exists", () => {
+    const flat: ArchitectureState = {
+      ...state,
+      nodes: [
+        { occurrence_id: "occ-sol", object_id: "sol-1", position: { x: 0, y: 0 } },
+        { occurrence_id: "occ-sys-1", object_id: "sys-1", position: { x: 0, y: 0 } },
+        { occurrence_id: "occ-sys-3", object_id: "sys-3", position: { x: 0, y: 0 } },
+      ],
+    };
+    const graph = contextGraph(design, flat);
+    const members = graph.systems.filter((system) => !system.external);
+    expect(members[0].position.x).not.toBe(members[1].position.x);
+    for (const member of members) {
+      expect(insideBoundary({ x: member.position.x, y: member.position.y, width: 200, height: 72 }, graph.boundary)).toBe(true);
+    }
   });
 });
 
 describe("decompositionGraph", () => {
-  it("exposes explicit provided and required interfaces per component", () => {
+  function contentRects(graph: ReturnType<typeof decompositionGraph>): Rect[] {
+    return [
+      ...graph.components.map((item) => ({
+        x: item.position.x,
+        y: item.position.y,
+        width: 260,
+        height: item.height,
+      })),
+      ...graph.repositories.map((item) => ({
+        x: item.position.x,
+        y: item.position.y,
+        width: 210,
+        height: 78,
+      })),
+    ];
+  }
+
+  it("preserves a saved manual component layout", () => {
     const graph = decompositionGraph(design, state);
-    const api = graph.components.find((item) => item.component.object_id === "comp-1")!;
-    expect(api.provided.map((ui) => ui.name)).toEqual(["Payments API"]);
-    expect(api.required.map((ui) => ui.name)).toEqual(["Ledger Client"]);
+    expect(graph.components.find((item) => item.component.object_id === "comp-1")!.position).toEqual({ x: 100, y: 100 });
+    expect(graph.components.find((item) => item.component.object_id === "comp-2")!.position).toEqual({ x: 420, y: 100 });
   });
 
-  it("connects a required interface to a provided interface with port handles", () => {
+  it("does not overlap any decomposition nodes", () => {
     const graph = decompositionGraph(design, state);
-    const connection = graph.edges.find((edge) => edge.kind === "connects_to")!;
-    expect(connection.source).toBe("occ-comp-1");
-    expect(connection.target).toBe("occ-comp-2");
-    expect(connection.sourceHandle).toBe("iface-iface-2");
-    expect(connection.targetHandle).toBe("iface-iface-3");
+    const rects = contentRects(graph);
+    for (let i = 0; i < rects.length; i += 1) {
+      for (let j = i + 1; j < rects.length; j += 1) {
+        expect(overlap(rects[i], rects[j])).toBe(false);
+      }
+    }
   });
 
-  it("renders repositories where they are used with semantic edges", () => {
+  it("places the repository below its connected component without overlap", () => {
     const graph = decompositionGraph(design, state);
+    const component = graph.components.find((item) => item.component.object_id === "comp-2")!;
     const repository = graph.repositories.find((item) => item.repository.object_id === "repo-1")!;
-    expect(repository.usedBy).toEqual(["comp-2"]);
-    expect(graph.edges.some((edge) => edge.kind === "uses" && edge.target === repository.key)).toBe(true);
+    const componentRect = { x: component.position.x, y: component.position.y, width: 260, height: component.height };
+    const repositoryRect = { x: repository.position.x, y: repository.position.y, width: 210, height: 78 };
+    expect(repositoryRect.y).toBeGreaterThanOrEqual(componentRect.y + componentRect.height);
+    expect(overlap(componentRect, repositoryRect)).toBe(false);
+  });
+
+  it("sizes the boundary compactly around components and repositories", () => {
+    const graph = decompositionGraph(design, state);
+    const rects = contentRects(graph);
+    for (const rect of rects) {
+      expect(insideBoundary(rect, graph.boundary)).toBe(true);
+    }
+    const minX = Math.min(...rects.map((rect) => rect.x));
+    const minY = Math.min(...rects.map((rect) => rect.y));
+    expect(graph.boundary.position.x).toBeLessThanOrEqual(minX - 40);
+    expect(graph.boundary.position.y).toBeLessThanOrEqual(minY - 40);
+    // Compact: the frame is not vastly larger than its contents.
+    const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+    const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
+    expect(graph.boundary.width).toBeLessThanOrEqual(maxX - minX + 120);
+    expect(graph.boundary.height).toBeLessThanOrEqual(maxY - minY + 140);
+  });
+
+  it("auto-arranges components left to right following dependencies", () => {
+    const graph = decompositionGraph(design, state, { auto: true });
+    const portal = graph.components.find((item) => item.component.object_id === "comp-1")!;
+    const ledger = graph.components.find((item) => item.component.object_id === "comp-2")!;
+    expect(portal.position.x).toBeLessThan(ledger.position.x);
+    const rects = contentRects(graph);
+    for (let i = 0; i < rects.length; i += 1) {
+      for (let j = i + 1; j < rects.length; j += 1) {
+        expect(overlap(rects[i], rects[j])).toBe(false);
+      }
+    }
+  });
+
+  it("accounts for component height when estimating node size", () => {
+    expect(componentNodeHeight(design.components[0])).toBeGreaterThanOrEqual(96);
+    expect(componentNodeHeight(design.components[1])).toBeLessThan(componentNodeHeight(design.components[0]));
   });
 });
 

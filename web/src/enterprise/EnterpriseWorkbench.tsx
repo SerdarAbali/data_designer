@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Viewport } from "@xyflow/react";
 
 import type { ArchitectureState } from "../architectureTypes";
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
@@ -24,6 +25,7 @@ import {
   updateEnterpriseObject,
   type ApplicationSupport,
   type CapabilityMap,
+  type EnterpriseApplication,
   type EnterpriseImpact,
   type EnterpriseLinkType,
   type EnterpriseModel,
@@ -33,6 +35,11 @@ import {
   type StrategyTrace,
 } from "./enterpriseModel";
 import { enterpriseLog } from "./enterpriseLog";
+import ApplicationSupportView from "./visual/ApplicationSupportView";
+import CapabilityMapView from "./visual/CapabilityMapView";
+import ProcessFlowView from "./visual/ProcessFlowView";
+import StrategyTraceView from "./visual/StrategyTraceView";
+import { strategyTraceGraph, type Point } from "./visual/enterpriseCanvasModel";
 
 type Props = {
   workspaceId: string;
@@ -40,6 +47,8 @@ type Props = {
   editable: boolean;
   saveStatus: SaveStatus;
   search?: string;
+  mutateActive?: (mutate: (state: ArchitectureState) => ArchitectureState) => void;
+  onReloadStates?: () => void;
   onOpenCatalog?: () => void;
   onNavigateTrace?: (node: TraceObjectRef) => void;
 };
@@ -68,6 +77,8 @@ export default function EnterpriseWorkbench({
   editable,
   saveStatus,
   search = "",
+  mutateActive,
+  onReloadStates,
   onOpenCatalog,
   onNavigateTrace,
 }: Props) {
@@ -75,13 +86,15 @@ export default function EnterpriseWorkbench({
   const { focus, clearFocus } = useWorkbenchNavigation();
 
   const [model, setModel] = useState<EnterpriseModel | null>(null);
-  const [view, setView] = useState<View>("objects");
+  const [view, setView] = useState<View>("strategy");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const viewportRef = useRef<Record<string, Viewport>>({});
+  const viewportKey = `${stateId}:${view}`;
 
   const [newKind, setNewKind] = useState<EnterpriseObjectType>("goal");
   const [newName, setNewName] = useState("");
@@ -203,6 +216,69 @@ export default function EnterpriseWorkbench({
     setInspectorCollapsed(false);
   }
 
+  function selectApplication(application: EnterpriseApplication) {
+    if (!onNavigateTrace) return;
+    const discipline = application.kind === "solution_boundary" ? "solution" : null;
+    onNavigateTrace({
+      id: application.object_id,
+      kind: application.kind === "solution_boundary" ? "solution_boundary" : "system",
+      name: application.name,
+      description: application.description ?? null,
+      discipline,
+      state_membership: activeState?.state_type === "current" ? "current" : "candidate",
+      external: false,
+    });
+  }
+
+  // Moves an enterprise node and marks the layout as user-authored so it is not
+  // re-laid-out on the next reload.
+  const moveEnterpriseObject = useCallback(
+    (occurrenceId: string, position: Point) => {
+      if (!occurrenceId || !mutateActive) return;
+      mutateActive((state) => ({
+        ...state,
+        nodes: state.nodes.map((node) =>
+          node.occurrence_id === occurrenceId
+            ? {
+                ...node,
+                position,
+                display_metadata: { ...(node.display_metadata ?? {}), enterprise_manual: true },
+              }
+            : node,
+        ),
+      }));
+    },
+    [mutateActive],
+  );
+
+  const handleAutoArrange = useCallback(() => {
+    if (!model || !strategyTrace || !isEditable || !mutateActive) return;
+    if (view !== "strategy") return;
+    const graph = strategyTraceGraph(model, strategyTrace, activeState, { forceAuto: true });
+    const moves = graph.nodes
+      .filter((node) => node.kind !== "application" && node.occurrenceId)
+      .map((node) => ({ occurrenceId: node.occurrenceId, position: node.position }));
+    if (moves.length === 0) return;
+    mutateActive((state) => {
+      let next = state;
+      for (const move of moves) {
+        next = {
+          ...next,
+          nodes: next.nodes.map((node) =>
+            node.occurrence_id === move.occurrenceId
+              ? {
+                  ...node,
+                  position: move.position,
+                  display_metadata: { ...(node.display_metadata ?? {}), enterprise_manual: true },
+                }
+              : node,
+          ),
+        };
+      }
+      return next;
+    });
+  }, [model, strategyTrace, isEditable, mutateActive, view, activeState]);
+
   // Trace navigation: reveal the destination object once the model is loaded.
   useEffect(() => {
     if (!focus || focus.discipline !== "enterprise") return;
@@ -264,6 +340,17 @@ export default function EnterpriseWorkbench({
         >
           + Add object
         </button>
+        {view === "strategy" && (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!isEditable || busy || !strategyTrace}
+            title={isEditable ? "Recompute the strategy trace layout" : "Current state is read-only"}
+            onClick={() => handleAutoArrange()}
+          >
+            Auto arrange
+          </button>
+        )}
         <span className="enterprise-toolbar-hint">
           {isEditable
             ? "Author goals, capabilities, processes, principles and roles."
@@ -299,7 +386,7 @@ export default function EnterpriseWorkbench({
           ))}
         </nav>
 
-        <div className="enterprise-content">
+        <div className={`enterprise-content${view === "strategy" || view === "application" ? " canvas" : ""}`}>
           {loading && !model ? (
             <div className="landscape-empty" role="status">
               Loading enterprise model…
@@ -333,9 +420,10 @@ export default function EnterpriseWorkbench({
                                 className={`enterprise-object-card${object.object_id === selectedObjectId ? " selected" : ""}`}
                                 onClick={() => selectObject(object.object_id)}
                               >
-                                <strong>{object.name}</strong>
-                                {object.owner && <em>{object.owner}</em>}
+                                <em>{ENTERPRISE_LABELS[object.kind] ?? object.kind}</em>
+                                <strong title={object.name}>{object.name}</strong>
                                 <span>{object.description ?? "No description recorded."}</span>
+                                {object.owner && <small>Owner: {object.owner}</small>}
                               </button>
                             </li>
                           ))}
@@ -347,190 +435,54 @@ export default function EnterpriseWorkbench({
               )}
 
               {view === "capability" && capabilityMap && (
-                <div className="enterprise-cards">
-                  {capabilityMap.capabilities.filter((entry) => matches(entry.capability.name))
-                    .length === 0 ? (
-                    <p className="architecture-topbar-hint">No capabilities recorded yet.</p>
-                  ) : (
-                    capabilityMap.capabilities
-                      .filter((entry) => matches(entry.capability.name))
-                      .map((entry) => (
-                        <article key={entry.capability.object_id} className="enterprise-card">
-                          <button
-                            type="button"
-                            className="enterprise-card-title"
-                            onClick={() => selectObject(entry.capability.object_id)}
-                          >
-                            {entry.capability.name}
-                          </button>
-                          <dl>
-                            <dt>Processes</dt>
-                            <dd>{entry.processes.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Applications</dt>
-                            <dd>{entry.applications.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Principles</dt>
-                            <dd>{entry.principles.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Owner</dt>
-                            <dd>{entry.owner_role?.name ?? "—"}</dd>
-                          </dl>
-                        </article>
-                      ))
-                  )}
-                </div>
+                <CapabilityMapView
+                  model={model}
+                  capabilityMap={capabilityMap}
+                  impact={impact}
+                  selectedObjectId={selectedObjectId}
+                  onSelectObject={selectObject}
+                />
               )}
 
               {view === "process" && processImpact && (
-                <div className="enterprise-cards">
-                  {processImpact.processes.length === 0 ? (
-                    <p className="architecture-topbar-hint">No processes recorded yet.</p>
-                  ) : (
-                    processImpact.processes
-                      .filter((entry) => matches(entry.process.name))
-                      .map((entry) => (
-                        <article key={entry.process.object_id} className="enterprise-card">
-                          <div className="enterprise-card-head">
-                            <button
-                              type="button"
-                              className="enterprise-card-title"
-                              onClick={() => selectObject(entry.process.object_id)}
-                            >
-                              {entry.process.name}
-                            </button>
-                            {entry.process.process_type === "value_stream" && (
-                              <span className="enterprise-badge">value stream</span>
-                            )}
-                            {entry.impacted && (
-                              <span className="enterprise-badge enterprise-badge-warn">impacted</span>
-                            )}
-                          </div>
-                          <dl>
-                            <dt>Capabilities</dt>
-                            <dd>{entry.capabilities.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Applications</dt>
-                            <dd>{entry.applications.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Requirements</dt>
-                            <dd>{entry.requirements.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Governed by</dt>
-                            <dd>{entry.governed_by.map((item) => item.name).join(", ") || "—"}</dd>
-                          </dl>
-                        </article>
-                      ))
-                  )}
-                </div>
+                <ProcessFlowView
+                  model={model}
+                  processImpact={processImpact}
+                  impact={impact}
+                  selectedObjectId={selectedObjectId}
+                  onSelectObject={selectObject}
+                />
               )}
 
               {view === "strategy" && strategyTrace && (
-                <div className="enterprise-strategy">
-                  {strategyTrace.chains.filter((chain) => matches(chain.goal.name)).length === 0 ? (
-                    <p className="architecture-topbar-hint">No goals recorded yet.</p>
-                  ) : (
-                    strategyTrace.chains
-                      .filter((chain) => matches(chain.goal.name))
-                      .map((chain) => (
-                        <article key={chain.goal.object_id} className="enterprise-trace">
-                          <div className="enterprise-card-head">
-                            <button
-                              type="button"
-                              className="enterprise-card-title"
-                              onClick={() => selectObject(chain.goal.object_id)}
-                            >
-                              {chain.goal.name}
-                            </button>
-                            <span className="enterprise-badge">goal</span>
-                          </div>
-                          {chain.steps.length === 0 ? (
-                            <p className="architecture-topbar-hint">No linked requirements.</p>
-                          ) : (
-                            <ol className="enterprise-trace-steps">
-                              {chain.steps.map((step) => (
-                                <li key={step.requirement.object_id}>
-                                  <div className="enterprise-trace-row">
-                                    <span className="enterprise-trace-label">Requirement</span>
-                                    <button
-                                      type="button"
-                                      className="enterprise-link-endpoint"
-                                      onClick={() => selectObject(step.requirement.object_id)}
-                                    >
-                                      {step.requirement.name}
-                                    </button>
-                                  </div>
-                                  <div className="enterprise-trace-row">
-                                    <span className="enterprise-trace-label">Capabilities</span>
-                                    <span>{step.capabilities.map((item) => item.name).join(", ") || "—"}</span>
-                                  </div>
-                                  <div className="enterprise-trace-row">
-                                    <span className="enterprise-trace-label">Processes</span>
-                                    <span>{step.processes.map((item) => item.name).join(", ") || "—"}</span>
-                                  </div>
-                                  <div className="enterprise-trace-row">
-                                    <span className="enterprise-trace-label">Applications</span>
-                                    <span>{step.applications.map((item) => item.name).join(", ") || "—"}</span>
-                                  </div>
-                                </li>
-                              ))}
-                            </ol>
-                          )}
-                          {chain.gaps.length > 0 && (
-                            <ul className="enterprise-gaps">
-                              {chain.gaps.map((gap) => (
-                                <li key={gap}>{gap}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </article>
-                      ))
-                  )}
-                  {strategyTrace.unlinked_requirements.length > 0 && (
-                    <section className="enterprise-gaps-block">
-                      <strong>Unlinked requirements</strong>
-                      <ul>
-                        {strategyTrace.unlinked_requirements.map((item) => (
-                          <li key={item.object_id}>{item.name}</li>
-                        ))}
-                      </ul>
-                    </section>
-                  )}
-                  {strategyTrace.gaps.length > 0 && (
-                    <section className="enterprise-gaps-block">
-                      <strong>Trace gaps</strong>
-                      <ul>
-                        {strategyTrace.gaps.map((gap) => (
-                          <li key={gap}>{gap}</li>
-                        ))}
-                      </ul>
-                    </section>
-                  )}
-                </div>
+                <StrategyTraceView
+                  model={model}
+                  strategyTrace={strategyTrace}
+                  state={activeState}
+                  editable={isEditable}
+                  selectedObjectId={selectedObjectId}
+                  onSelectObject={selectObject}
+                  onSelectApplication={selectApplication}
+                  onMoveObject={moveEnterpriseObject}
+                  defaultViewport={viewportRef.current[viewportKey]}
+                  onViewportChange={(viewport) => {
+                    viewportRef.current[viewportKey] = viewport;
+                  }}
+                />
               )}
 
               {view === "application" && applicationSupport && (
-                <div className="enterprise-cards">
-                  {applicationSupport.applications.filter((entry) => matches(entry.application.name))
-                    .length === 0 ? (
-                    <p className="architecture-topbar-hint">No applications available.</p>
-                  ) : (
-                    applicationSupport.applications
-                      .filter((entry) => matches(entry.application.name))
-                      .map((entry) => (
-                        <article key={entry.application.object_id} className="enterprise-card">
-                          <div className="enterprise-card-head">
-                            <span className="enterprise-card-title-static">
-                              {entry.application.name}
-                            </span>
-                            <span className="enterprise-badge">{entry.application.kind}</span>
-                          </div>
-                          <dl>
-                            <dt>Supports capabilities</dt>
-                            <dd>{entry.capabilities.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Supports processes</dt>
-                            <dd>{entry.processes.map((item) => item.name).join(", ") || "—"}</dd>
-                            <dt>Satisfies requirements</dt>
-                            <dd>{entry.requirements.map((item) => item.name).join(", ") || "—"}</dd>
-                          </dl>
-                        </article>
-                      ))
-                  )}
-                </div>
+                <ApplicationSupportView
+                  model={model}
+                  applicationSupport={applicationSupport}
+                  selectedObjectId={selectedObjectId}
+                  onSelectObject={selectObject}
+                  onSelectApplication={selectApplication}
+                  defaultViewport={viewportRef.current[viewportKey]}
+                  onViewportChange={(viewport) => {
+                    viewportRef.current[viewportKey] = viewport;
+                  }}
+                />
               )}
 
               {view === "impact" && impact && (

@@ -136,10 +136,11 @@ def _build_trace(db, ctx: DemoContext) -> None:
     if ctx.has("enterprise") and ctx.has("solution"):
         db.add(
             ctx.relationship(
-                "trace.process.solution",
-                ctx.id("ent.process"),
+                "trace.solution.process",
                 ctx.id("solution.onboarding"),
+                ctx.id("ent.process"),
                 "supports",
+                created_in_state_id=ctx.id("state.candidate"),
             )
         )
     if ctx.has("solution") and ctx.has("information"):
@@ -152,7 +153,15 @@ def _build_trace(db, ctx: DemoContext) -> None:
             )
         )
     if ctx.has("information"):
-        for spec in ("customer_id", "first_name", "last_name", "email", "status", "consent"):
+        for spec in (
+            "customer_id",
+            "first_name",
+            "last_name",
+            "email",
+            "status",
+            "consent",
+            "preferred_contact_method",
+        ):
             db.add(
                 ctx.relationship(
                     f"trace.entity.{spec}",

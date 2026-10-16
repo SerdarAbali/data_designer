@@ -41,14 +41,14 @@ vi.mock("@xyflow/react", () => ({
     onNodeClick,
     children,
   }: {
-    nodes: { id: string; data: { entity?: { name: string } } }[];
+    nodes: { id: string; data: { entity?: { name: string }; label?: string } }[];
     onNodeClick?: (event: null, node: unknown) => void;
     children: React.ReactNode;
   }) => (
     <div>
       {nodes.map((node) => (
         <button key={node.id} onClick={() => onNodeClick?.(null, node)}>
-          {node.data.entity?.name ?? node.id}
+          {node.data.entity?.name ?? node.data.label ?? node.id}
         </button>
       ))}
       {children}
@@ -176,6 +176,8 @@ const integrationFlow: IntegrationMessageFlow = {
   contract,
   routing: "",
   trigger_config: {},
+  channel_kind: null,
+  channel_label: null,
   phases: [],
 };
 const integrationConformance: IntegrationConformance = {
@@ -241,6 +243,9 @@ beforeEach(() => {
     vi.fn(async (path: string) => {
       const url = String(path);
       if (url.includes("/enterprise/model")) return reply(enterpriseModel);
+      if (url.includes("/enterprise/strategy-trace")) {
+        return reply({ state_id: "candidate-a", chains: [], unlinked_requirements: [], gaps: [] });
+      }
       if (url.includes("/information/model")) return reply(informationModel);
       if (url.includes("/integration-design/landscape")) return reply(integrationLandscape);
       if (url.includes("/integration-design/contracts/")) {
@@ -369,7 +374,7 @@ describe("workbench trace navigation", () => {
         </FocusHarness>
       </WorkbenchNavigationProvider>,
     );
-    await screen.findByRole("button", { name: /Payment processing/ });
+    await screen.findByRole("button", { name: "Objects" });
     fireEvent.click(screen.getByRole("button", { name: "Request focus" }));
     await waitFor(() => expect(screen.getByTestId("focus-id").textContent).toBe("ent-1"));
     expect(screen.queryByRole("complementary", { name: "Enterprise object details" })).toBeNull();

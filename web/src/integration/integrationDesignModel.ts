@@ -21,6 +21,8 @@ export type AuthType = "none" | "api_key" | "basic" | "oauth2" | "jwt" | "mtls" 
 export type BackoffStrategy = "none" | "linear" | "exponential";
 export type OrchestrationRole = "orchestration" | "choreography" | "participant" | "none";
 export type ConformanceStatus = "passing" | "failing" | "not_run" | "outdated";
+export type FlowNodeRole = "validation" | "routing" | "transformation" | "constant";
+export type ChannelKind = "api" | "event" | "file";
 export type FlowPhaseName = ArchitecturePhaseKind;
 
 export const INTEGRATION_PATTERNS: IntegrationPattern[] = [
@@ -83,6 +85,12 @@ export const STATUS_LABELS: Record<string, string> = {
   attention: "Attention",
 };
 
+export const INTERACTION_TYPE_LABELS: Record<string, string> = {
+  ONE_WAY: "One way",
+  REQUEST_RESPONSE: "Request / response",
+  ASYNC_CALLBACK: "Async callback",
+};
+
 export const CONFORMANCE_LABELS: Record<ConformanceStatus, string> = {
   passing: "Passing",
   failing: "Failing",
@@ -132,6 +140,8 @@ export type IntegrationEndpointRef = {
   system_name: string;
   object_id: string;
   object_name: string;
+  system_kind?: string | null;
+  is_runtime?: boolean;
 };
 
 export type IntegrationContractSummary = {
@@ -152,6 +162,7 @@ export type IntegrationContractSummary = {
   has_response_graph: boolean;
   has_error_graph: boolean;
   specification: Partial<IntegrationOperatingSpec>;
+  idempotency_key_field_name?: string | null;
   target_fields_mapped: number;
   target_fields_total: number;
   scenario_count: number;
@@ -169,6 +180,8 @@ export type IntegrationFlowTransformation = {
   node_id: string;
   type: string;
   label: string;
+  role: FlowNodeRole;
+  position: { x: number; y: number } | null;
 };
 
 export type IntegrationFlowPhase = {
@@ -181,12 +194,15 @@ export type IntegrationFlowPhase = {
   target_field_count: number;
   mapped_target_count: number;
   target_fields: string[];
+  unmapped_required_fields: string[];
 };
 
 export type IntegrationMessageFlow = {
   contract: IntegrationContractSummary;
   routing: string;
   trigger_config: Record<string, unknown>;
+  channel_kind: ChannelKind | null;
+  channel_label: string | null;
   phases: IntegrationFlowPhase[];
 };
 
@@ -220,6 +236,44 @@ export type IntegrationConformance = {
   error_coverage: IntegrationCoverage;
   scenarios: IntegrationScenarioStatus[];
   summary: Record<string, number>;
+};
+
+export type IntegrationSequenceParticipant = {
+  id: string;
+  label: string;
+  kind: string;
+  system_id: string | null;
+  system_name: string | null;
+  is_runtime: boolean;
+};
+
+export type IntegrationSequenceInteraction = {
+  id: string;
+  kind: string;
+  phase: string | null;
+  from_id: string | null;
+  to_id: string | null;
+  label: string;
+  contract_step: boolean;
+};
+
+export type IntegrationScenarioSequence = {
+  id: string;
+  name: string;
+  category: string;
+  status: ConformanceStatus;
+  revision: number;
+  outdated: boolean;
+  step_count: number;
+  participants: IntegrationSequenceParticipant[];
+  interactions: IntegrationSequenceInteraction[];
+};
+
+export type IntegrationSequence = {
+  contract_id: string;
+  contract_name: string;
+  revision: number;
+  scenarios: IntegrationScenarioSequence[];
 };
 
 const base = (workspaceId: string) => `/api/workspaces/${workspaceId}/integration-design`;
@@ -258,11 +312,18 @@ function normalizePhase(raw: IntegrationFlowPhase): IntegrationFlowPhase {
     configured: Boolean(raw?.configured),
     node_count: raw?.node_count ?? 0,
     transformation_count: raw?.transformation_count ?? 0,
-    transformations: raw?.transformations ?? [],
+    transformations: (raw?.transformations ?? []).map((item) => ({
+      node_id: item.node_id,
+      type: item.type,
+      label: item.label,
+      role: item.role ?? "transformation",
+      position: item.position ?? null,
+    })),
     source_field_count: raw?.source_field_count ?? 0,
     target_field_count: raw?.target_field_count ?? 0,
     mapped_target_count: raw?.mapped_target_count ?? 0,
     target_fields: raw?.target_fields ?? [],
+    unmapped_required_fields: raw?.unmapped_required_fields ?? [],
   };
 }
 
@@ -325,6 +386,8 @@ export async function fetchIntegrationMessageFlow(
     contract: normalizeContract(raw.contract),
     routing: raw.routing ?? "",
     trigger_config: raw.trigger_config ?? {},
+    channel_kind: raw.channel_kind ?? null,
+    channel_label: raw.channel_label ?? null,
     phases: (raw.phases ?? []).map(normalizePhase),
   };
   integrationLog.info("message flow generated", {
@@ -361,6 +424,35 @@ export async function fetchIntegrationConformance(
     summary: conformance.summary,
   });
   return conformance;
+}
+
+export async function fetchIntegrationSequence(
+  workspaceId: string,
+  integrationId: string,
+  stateId: string,
+): Promise<IntegrationSequence> {
+  const raw = await api<IntegrationSequence>(
+    `${base(workspaceId)}/contracts/${integrationId}/sequence?state_id=${stateId}`,
+  );
+  const sequence: IntegrationSequence = {
+    contract_id: raw.contract_id,
+    contract_name: raw.contract_name,
+    revision: raw.revision,
+    scenarios: (raw.scenarios ?? []).map((scenario) => ({
+      ...scenario,
+      status: scenario.status ?? "not_run",
+      outdated: Boolean(scenario.outdated),
+      step_count: scenario.step_count ?? 0,
+      participants: scenario.participants ?? [],
+      interactions: scenario.interactions ?? [],
+    })),
+  };
+  integrationLog.info("sequence loaded", {
+    integrationId,
+    revision: sequence.revision,
+    scenarios: sequence.scenarios.length,
+  });
+  return sequence;
 }
 
 export type SaveIntegrationSpecPayload = {

@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.architecture.routes import get_accessible_workspace
@@ -250,14 +250,22 @@ def _applications(db: Session, workspace: Workspace) -> list[EnterpriseApplicati
         )
     ):
         result.append(
-            EnterpriseApplicationResponse(object_id=system.id, name=system.name, kind="system")
+            EnterpriseApplicationResponse(
+                object_id=system.id,
+                name=system.name,
+                kind="system",
+                description=system.description,
+            )
         )
     for boundary in db.scalars(
         select(SolutionBoundary).where(SolutionBoundary.tenant_id == workspace.tenant_id)
     ):
         result.append(
             EnterpriseApplicationResponse(
-                object_id=boundary.object_id, name=boundary.name, kind="solution_boundary"
+                object_id=boundary.object_id,
+                name=boundary.name,
+                kind="solution_boundary",
+                description=boundary.description,
             )
         )
     result.sort(key=lambda item: (item.kind, item.name))
@@ -315,7 +323,10 @@ def _build_model(
         select(ArchitectureRelationship).where(
             ArchitectureRelationship.tenant_id == workspace.tenant_id,
             ArchitectureRelationship.relationship_type.in_(ENTERPRISE_LINK_TYPES),
-            ArchitectureRelationship.created_in_state_id.in_([None, state.id]),
+            or_(
+                ArchitectureRelationship.created_in_state_id.is_(None),
+                ArchitectureRelationship.created_in_state_id == state.id,
+            ),
         )
     ):
         if edge.source_object_id not in known_ids or edge.target_object_id not in known_ids:

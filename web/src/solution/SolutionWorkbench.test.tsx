@@ -403,8 +403,39 @@ describe("SolutionWorkbench", () => {
     const { mutateActive } = renderWorkbench({ editable: false });
     await openView("Decomposition");
     await screen.findByTestId("node-occ-comp-1");
+    expect(screen.getByRole("button", { name: "Auto arrange" })).toHaveProperty("disabled", true);
     fireEvent.click(screen.getByLabelText("drag occ-comp-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Auto arrange" }));
     expect(mutateActive).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite a saved manual layout on load", async () => {
+    const { mutateActive } = renderWorkbench();
+    await openView("Decomposition");
+    await screen.findByTestId("node-occ-comp-1");
+    expect(mutateActive).not.toHaveBeenCalled();
+  });
+
+  it("auto arrange recomputes and persists a valid layout", async () => {
+    const { mutateActive } = renderWorkbench();
+    await openView("Decomposition");
+    await screen.findByTestId("node-occ-comp-1");
+    fireEvent.click(screen.getByRole("button", { name: "Auto arrange" }));
+    await waitFor(() => expect(mutateActive).toHaveBeenCalled());
+    const mutate = mutateActive.mock.calls.at(-1)![0] as (state: ArchitectureState) => ArchitectureState;
+    const next = mutate({
+      ...candidateState,
+      nodes: [
+        ...candidateState.nodes,
+        { occurrence_id: "occ-comp-1", object_id: "comp-1", position: { x: 100, y: 100 } },
+        { occurrence_id: "occ-comp-2", object_id: "comp-2", position: { x: 420, y: 100 } },
+      ],
+    });
+    const portal = next.nodes.find((node) => node.occurrence_id === "occ-comp-1")!.position;
+    const ledger = next.nodes.find((node) => node.occurrence_id === "occ-comp-2")!.position;
+    expect(portal.x).toBeLessThan(ledger.x);
+    expect(portal).not.toEqual({ x: 100, y: 100 });
+    expect(ledger).not.toEqual({ x: 420, y: 100 });
   });
 
   it("selects the destination solution object when navigating from traceability", async () => {

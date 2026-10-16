@@ -414,3 +414,119 @@ def test_integration_designer_demo_fixture_shape() -> None:
     assert demo["contract"]["implementation_status"] in statuses
     assert {iface["direction"] for iface in demo["interfaces"]} <= {"provided", "required"}
     assert demo["scenarios"], "the fixture must include at least one scenario"
+
+
+def test_integration_flow_projects_roles_channel_and_unmapped_required(client) -> None:
+    test_client, _ = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace(test_client, headers)
+    workspace_id = workspace["id"]
+    state_id = candidate["id"]
+
+    source = string_endpoint(test_client, "CRM", "name")
+    target = string_endpoint(test_client, "ERP", "code")
+    interface_id = _create_interface(test_client, headers, workspace_id, state_id)
+    contract = mapped_contract(test_client, "Customer push", source, target)
+
+    # A required target field that no mapping edge populates.
+    added = test_client.post(
+        f"/api/catalog/objects/{target['object']['id']}/fields",
+        json={"name": "region_code", "data_type": "string", "required": True},
+        headers=headers,
+    )
+    assert added.status_code == 201, added.text
+
+    updated = test_client.patch(
+        f"/api/integrations/{contract['id']}",
+        json={
+            "expected_revision": contract["revision"],
+            "pattern": "request_reply",
+            "implementation_status": "built",
+            "producer_interface_id": interface_id,
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+
+    flow = test_client.get(
+        f"{_design(workspace_id)}/contracts/{contract['id']}/flow",
+        params={"state_id": state_id},
+    ).json()
+    assert flow["channel_kind"] == "api"
+    assert flow["channel_label"] == "API endpoint"
+    request = next(phase for phase in flow["phases"] if phase["phase"] == "request")
+    assert request["transformations"][0]["role"] == "transformation"
+    assert set(request["transformations"][0]["position"]) == {"x", "y"}
+    assert "region_code" in request["unmapped_required_fields"]
+    assert "region_code" not in request["target_fields"]
+
+    # A publish/subscribe contract with an async interface reports an event channel.
+    async_iface = _create_interface(test_client, headers, workspace_id, state_id, name="Event Bus")
+    patched = test_client.patch(
+        f"/api/integrations/{contract['id']}",
+        json={
+            "expected_revision": updated.json()["revision"],
+            "pattern": "publish_subscribe",
+            "consumer_interface_id": async_iface,
+        },
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+    event_flow = test_client.get(
+        f"{_design(workspace_id)}/contracts/{contract['id']}/flow",
+        params={"state_id": state_id},
+    ).json()
+    assert event_flow["channel_kind"] == "event"
+    assert event_flow["channel_label"] == "Event / topic"
+
+    landscape = test_client.get(
+        f"{_design(workspace_id)}/landscape", params={"state_id": state_id}
+    ).json()
+    summary = next(item for item in landscape["contracts"] if item["id"] == contract["id"])
+    assert summary["target"]["is_runtime"] is False
+    assert summary["target"]["system_kind"] == "custom platform"
+
+
+def test_integration_sequence_projects_participants_and_interactions(client) -> None:
+    test_client, _ = client
+    headers = csrf_headers(test_client)
+    workspace, _current, candidate = _workspace(test_client, headers)
+    workspace_id = workspace["id"]
+    state_id = candidate["id"]
+
+    source = string_endpoint(test_client, "CRM", "name")
+    target = string_endpoint(test_client, "ERP", "code")
+    contract = mapped_contract(test_client, "Customer push", source, target)
+    document = scenario_document(contract, source, target)
+    created = test_client.post(
+        "/api/scenarios",
+        json={
+            "scope_integration_id": contract["id"],
+            "name": "Happy path",
+            "category": "happy_path",
+            "document": document,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+
+    sequence = test_client.get(
+        f"{_design(workspace_id)}/contracts/{contract['id']}/sequence",
+        params={"state_id": state_id},
+    ).json()
+    assert sequence["contract_id"] == contract["id"]
+    assert sequence["revision"] == contract["revision"]
+    assert len(sequence["scenarios"]) == 1
+    scenario = sequence["scenarios"][0]
+    assert scenario["status"] == "passing"
+    assert {item["id"] for item in scenario["participants"]} == {"user", "src", "tgt"}
+    participant_kinds = {item["id"]: item["kind"] for item in scenario["participants"]}
+    assert participant_kinds["user"] == "actor"
+    assert participant_kinds["src"] == "system"
+    interactions = scenario["interactions"]
+    assert [item["kind"] for item in interactions[:2]] == ["actor", "contract"]
+    contract_step = next(item for item in interactions if item["contract_step"])
+    assert contract_step["phase"] == "request"
+    assert contract_step["from_id"] == "src"
+    assert contract_step["to_id"] == "tgt"
+

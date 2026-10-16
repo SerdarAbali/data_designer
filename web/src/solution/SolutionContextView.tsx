@@ -83,7 +83,7 @@ export default function SolutionContextView({
         targetHandle: edge.targetHandle ?? undefined,
         type: "solutionEdge" as const,
         markerEnd: { type: MarkerType.ArrowClosed },
-        data: { kind: edge.kind, label: edge.label },
+        data: { kind: edge.kind, label: edge.label, sourceOffset: edge.sourceOffset, targetOffset: edge.targetOffset },
       })),
     [graph.edges],
   );

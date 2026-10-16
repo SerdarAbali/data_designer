@@ -24,11 +24,13 @@ def _add(db, ctx: DemoContext, key: str, registry_kind: str, typed, position) ->
 
 def build_enterprise(db, ctx: DemoContext) -> None:
     now = ctx.now
+    candidate = ctx.id("state.candidate")
     goal_id = ctx.id("ent.goal")
     requirement_id = ctx.id("ent.requirement")
     capability_id = ctx.id("ent.capability")
     process_id = ctx.id("ent.process")
     principle_id = ctx.id("ent.principle")
+    risk_id = ctx.id("ent.risk")
     role_id = ctx.id("ent.role")
 
     _add(
@@ -87,7 +89,7 @@ def build_enterprise(db, ctx: DemoContext) -> None:
             tenant_id=ctx.tenant_id,
             name="Customer onboarding",
             description="Current-state manual onboarding step pending automation.",
-            owner="Customer Operations",
+            owner="Head of Customer Operations",
             process_type="value_stream",
             properties={},
             created_in_state_id=None,
@@ -115,6 +117,27 @@ def build_enterprise(db, ctx: DemoContext) -> None:
         ),
         {"x": 760, "y": 60},
     )
+    # The single intentional synthetic risk that keeps the Enterprise gap and
+    # impact analysis demonstrable; it is deliberately left unlinked.
+    _add(
+        db,
+        ctx,
+        "ent.risk",
+        "architecture_principle",
+        ArchitecturePrinciple(
+            object_id=risk_id,
+            tenant_id=ctx.tenant_id,
+            name="Legacy billing dependency",
+            description="Billing still depends on the legacy batch interface (synthetic demo).",
+            principle_type="risk",
+            rationale="Single point of failure during onboarding activation.",
+            properties={},
+            created_in_state_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        {"x": 760, "y": 420},
+    )
     _add(
         db,
         ctx,
@@ -123,9 +146,9 @@ def build_enterprise(db, ctx: DemoContext) -> None:
         OrganizationRole(
             object_id=role_id,
             tenant_id=ctx.tenant_id,
-            name="Customer Operations",
+            name="Head of Customer Operations",
             description="Owns onboarding outcomes.",
-            role_type="team",
+            role_type="role",
             properties={},
             created_in_state_id=None,
             created_at=now,
@@ -134,18 +157,80 @@ def build_enterprise(db, ctx: DemoContext) -> None:
         {"x": 760, "y": 260},
     )
 
+    # Canonical strategy chain plus ownership, governance and application
+    # support. Relationship rows are scoped to the candidate state so the
+    # enterprise projections surface them, and every edge follows LINK_RULES.
     db.add_all(
         [
-            ctx.relationship("ent.rel.goal.requirement", goal_id, requirement_id, "drives"),
             ctx.relationship(
-                "ent.rel.requirement.capability", requirement_id, capability_id, "needs"
+                "ent.rel.goal.requirement",
+                goal_id,
+                requirement_id,
+                "drives",
+                created_in_state_id=candidate,
             ),
             ctx.relationship(
-                "ent.rel.capability.process", capability_id, process_id, "has_process"
+                "ent.rel.requirement.capability",
+                requirement_id,
+                capability_id,
+                "needs",
+                created_in_state_id=candidate,
             ),
             ctx.relationship(
-                "ent.rel.capability.principle", capability_id, principle_id, "governed_by"
+                "ent.rel.capability.process",
+                capability_id,
+                process_id,
+                "has_process",
+                created_in_state_id=candidate,
             ),
-            ctx.relationship("ent.rel.process.role", process_id, role_id, "owned_by"),
+            ctx.relationship(
+                "ent.rel.capability.principle",
+                capability_id,
+                principle_id,
+                "governed_by",
+                created_in_state_id=candidate,
+            ),
+            ctx.relationship(
+                "ent.rel.process.principle",
+                process_id,
+                principle_id,
+                "governed_by",
+                created_in_state_id=candidate,
+            ),
+            ctx.relationship(
+                "ent.rel.process.role",
+                process_id,
+                role_id,
+                "owned_by",
+                created_in_state_id=candidate,
+            ),
+            ctx.relationship(
+                "ent.rel.capability.role",
+                capability_id,
+                role_id,
+                "owned_by",
+                created_in_state_id=candidate,
+            ),
+            ctx.relationship(
+                "ent.rel.system.crm.capability",
+                ctx.id("system.crm"),
+                capability_id,
+                "supports",
+                created_in_state_id=candidate,
+            ),
+            ctx.relationship(
+                "ent.rel.system.runtime.process",
+                ctx.id("system.integration_runtime"),
+                process_id,
+                "supports",
+                created_in_state_id=candidate,
+            ),
+            ctx.relationship(
+                "ent.rel.system.billing.process",
+                ctx.id("system.billing"),
+                process_id,
+                "supports",
+                created_in_state_id=candidate,
+            ),
         ]
     )

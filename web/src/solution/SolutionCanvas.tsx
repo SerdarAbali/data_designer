@@ -87,7 +87,7 @@ export default function SolutionCanvas<NodeType extends Node, EdgeType extends E
         deleteKeyCode={null}
         defaultViewport={defaultViewport}
         onMoveEnd={(_event, viewport) => onViewportChange?.(viewport)}
-        fitView
+        fitView={!defaultViewport}
         fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
         minZoom={0.2}
         maxZoom={1.8}

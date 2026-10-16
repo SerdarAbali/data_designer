@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Viewport } from "@xyflow/react";
 
 import type { ArchitectureState } from "../architectureTypes";
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
 import type { ScenarioPhase } from "../scenarioModel";
+import IntegrationObjectPanel from "./IntegrationObjectPanel";
 import IntegrationPropertiesPanel, {
   type IntegrationPropertiesDraft,
 } from "./IntegrationPropertiesPanel";
@@ -13,19 +15,33 @@ import {
   fetchIntegrationContractDetail,
   fetchIntegrationLandscape,
   fetchIntegrationMessageFlow,
-  PATTERN_LABELS,
+  fetchIntegrationSequence,
+  INTERACTION_TYPE_LABELS,
   PHASE_LABELS,
   saveIntegrationSpec,
   STATUS_LABELS,
   type ConformanceStatus,
+  type FlowPhaseName,
   type IntegrationConformance,
   type IntegrationContractDetail,
   type IntegrationContractSummary,
   type IntegrationLandscape,
   type IntegrationMessageFlow,
   type IntegrationScenarioStatus,
+  type IntegrationSequence,
 } from "./integrationDesignModel";
 import { integrationLog } from "./integrationLog";
+import {
+  INTEGRATION_VIEWS,
+  integrationTopology,
+  type FlowStage,
+  type IntegrationTopologyNode,
+  type IntegrationViewId,
+} from "./integrationViews";
+import FlowDesignerView from "./visual/FlowDesignerView";
+import IntegrationSequenceView from "./visual/IntegrationSequenceView";
+import IntegrationTopologyView from "./visual/IntegrationTopologyView";
+import InterfaceChannelView from "./visual/InterfaceChannelView";
 import type { TraceObjectRef } from "../workbench/workbenchTypes";
 import { useWorkbenchNavigation } from "../workbench/WorkbenchNavigation";
 
@@ -40,16 +56,7 @@ type Props = {
   onNavigateTrace?: (node: TraceObjectRef) => void;
 };
 
-type View = "landscape" | "contract" | "flow" | "mapping" | "scenarios" | "conformance";
-
-const VIEWS: { id: View; label: string }[] = [
-  { id: "landscape", label: "Landscape" },
-  { id: "contract", label: "Interface & Contract" },
-  { id: "flow", label: "Message Flow" },
-  { id: "mapping", label: "Transformation & Mapping" },
-  { id: "scenarios", label: "Scenario & Sequence" },
-  { id: "conformance", label: "Test & Conformance" },
-];
+type View = IntegrationViewId;
 
 function coverageLabel(mapped: number, total: number): string {
   return `${mapped}/${total}`;
@@ -74,12 +81,23 @@ export default function IntegrationWorkbench({
   const [detail, setDetail] = useState<IntegrationContractDetail | null>(null);
   const [flow, setFlow] = useState<IntegrationMessageFlow | null>(null);
   const [conformance, setConformance] = useState<IntegrationConformance | null>(null);
+  const [sequence, setSequence] = useState<IntegrationSequence | null>(null);
+  const [sequenceLoading, setSequenceLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [propertiesError, setPropertiesError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Landscape visual state.
+  const [selectedNode, setSelectedNode] = useState<IntegrationTopologyNode | null>(null);
+  const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [landscapeViewport, setLandscapeViewport] = useState<Viewport | undefined>(undefined);
+  const [showResilience, setShowResilience] = useState(false);
+  const [selectedPhase, setSelectedPhase] = useState<FlowPhaseName>("request");
+  const [stageDetail, setStageDetail] = useState<{ stage: FlowStage; phase: FlowPhaseName } | null>(null);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
 
   const isEditable = editable && landscape?.state_type !== "current";
 
@@ -110,7 +128,14 @@ export default function IntegrationWorkbench({
     setDetail(null);
     setFlow(null);
     setConformance(null);
+    setSequence(null);
     setPropertiesOpen(false);
+    setSelectedNode(null);
+    setManualPositions({});
+    setLandscapeViewport(undefined);
+    setSelectedPhase("request");
+    setStageDetail(null);
+    setSelectedScenarioId(null);
   }, [stateId]);
 
   const loadContract = useCallback(
@@ -141,6 +166,7 @@ export default function IntegrationWorkbench({
     integrationLog.info("contract selected", { integrationId, view: nextView });
     setSelectedId(integrationId);
     setPropertiesOpen(false);
+    setSelectedNode(null);
     setView(nextView);
     void loadContract(integrationId);
   }
@@ -159,6 +185,30 @@ export default function IntegrationWorkbench({
     clearFocus(focus.nonce);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, landscape, clearFocus]);
+
+  // Lazily project sequences only when the Scenario & Sequence view is opened.
+  useEffect(() => {
+    if (view !== "scenarios" || !selectedId || !stateId) {
+      setSequence(null);
+      return;
+    }
+    let cancelled = false;
+    setSequenceLoading(true);
+    fetchIntegrationSequence(workspaceId, selectedId, stateId)
+      .then((data) => {
+        if (!cancelled) setSequence(data);
+      })
+      .catch((caught: unknown) => {
+        integrationLog.error("sequence load failed", caught);
+        if (!cancelled) setSequence(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSequenceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view, selectedId, stateId, workspaceId, refreshKey]);
 
   async function handleSaveProperties(draft: IntegrationPropertiesDraft) {
     if (!selectedId || !detail) return;
@@ -194,25 +244,25 @@ export default function IntegrationWorkbench({
     [landscape, matches],
   );
 
+  const topologyLandscape = useMemo<IntegrationLandscape | null>(
+    () => (landscape ? { ...landscape, contracts } : null),
+    [landscape, contracts],
+  );
+
+  const topology = useMemo(
+    () => (topologyLandscape ? integrationTopology(topologyLandscape) : { nodes: [], edges: [], mediatedContractIds: [] }),
+    [topologyLandscape],
+  );
+
+  const nodesByRefId = useMemo(
+    () => new Map(topology.nodes.map((node) => [node.refId, node])),
+    [topology.nodes],
+  );
+
   const selectedContract: IntegrationContractSummary | null = useMemo(
     () => landscape?.contracts.find((item) => item.id === selectedId) ?? detail?.contract ?? null,
     [landscape, selectedId, detail],
   );
-
-  const scenarioGroups = useMemo(() => {
-    const scenarios = conformance?.scenarios ?? [];
-    const order: { key: string; label: string }[] = [
-      { key: "happy_path", label: "Happy path" },
-      { key: "alternative", label: "Alternative" },
-      { key: "error", label: "Error" },
-    ];
-    return order
-      .map((group) => ({
-        ...group,
-        items: scenarios.filter((item) => item.category === group.key).filter((item) => matches(item.name)),
-      }))
-      .filter((group) => group.items.length > 0);
-  }, [conformance, matches]);
 
   function coverageBar(label: string, mapped: number, total: number) {
     const ratio = total === 0 ? 0 : Math.round((mapped / total) * 100);
@@ -230,6 +280,7 @@ export default function IntegrationWorkbench({
   }
 
   function renderLandscape() {
+    if (!topologyLandscape) return null;
     if (contracts.length === 0) {
       return (
         <div className="landscape-empty">
@@ -248,110 +299,34 @@ export default function IntegrationWorkbench({
       );
     }
     return (
-      <div className="integration-cards">
-        {contracts.map((contract) => (
-          <article key={contract.id} className="integration-card">
-            <div className="integration-card-head">
-              <button
-                type="button"
-                className="integration-card-title"
-                onClick={() => selectContract(contract.id)}
-              >
-                {contract.name}
-              </button>
-              <span className={`integration-badge integration-status-${contract.status}`}>
-                {STATUS_LABELS[contract.status] ?? contract.status}
-              </span>
-            </div>
-            <p className="integration-card-flow">
-              {contract.source.system_name} · {contract.source.object_name} →{" "}
-              {contract.target.system_name} · {contract.target.object_name}
-            </p>
-            <dl>
-              <dt>Pattern</dt>
-              <dd>{contract.pattern ? PATTERN_LABELS[contract.pattern] : "Unspecified"}</dd>
-              <dt>Producer</dt>
-              <dd>{contract.producer_interface?.name ?? "—"}</dd>
-              <dt>Consumer</dt>
-              <dd>{contract.consumer_interface?.name ?? "—"}</dd>
-              <dt>Mapped target fields</dt>
-              <dd>
-                {contract.target_fields_mapped}/{contract.target_fields_total}
-              </dd>
-              <dt>Scenarios</dt>
-              <dd>{contract.scenario_count}</dd>
-            </dl>
-            <div className="integration-card-actions">
-              <button type="button" onClick={() => selectContract(contract.id, "contract")}>
-                Interfaces
-              </button>
-              <button type="button" onClick={() => selectContract(contract.id, "flow")}>
-                Flow
-              </button>
-              <button type="button" onClick={() => selectContract(contract.id, "conformance")}>
-                Conformance
-              </button>
-            </div>
-          </article>
-        ))}
-      </div>
-    );
-  }
-
-  function renderInterfaceSummary(
-    label: string,
-    side: IntegrationContractDetail["source_interface"],
-  ) {
-    if (!side) {
-      return (
-        <div className="integration-side">
-          <h4>{label}</h4>
-          <p className="architecture-topbar-hint">No linked interface.</p>
-        </div>
-      );
-    }
-    return (
-      <div className="integration-side">
-        <h4>
-          {label}: {side.name}
-        </h4>
-        <dl>
-          <dt>Direction</dt>
-          <dd>{side.direction ?? "—"}</dd>
-          <dt>Kind</dt>
-          <dd>{side.interface_kind ?? "—"}</dd>
-          <dt>Protocol</dt>
-          <dd>{side.protocol ?? "—"}</dd>
-          <dt>Component</dt>
-          <dd>{side.component_name ?? "—"}</dd>
-        </dl>
-        <strong className="integration-side-heading">Operations</strong>
-        {side.operations.length === 0 ? (
-          <p className="architecture-topbar-hint">No operations recorded.</p>
-        ) : (
-          <ul className="integration-operations">
-            {side.operations.map((operation) => (
-              <li key={operation.object_id}>
-                {operation.name} <em>{operation.operation_kind}</em>
-              </li>
-            ))}
-          </ul>
-        )}
-        <strong className="integration-side-heading">Contract phases</strong>
-        <ul className="integration-operations">
-          {(detail?.phases ?? []).map((phase) => (
-            <li key={phase.phase}>
-              {PHASE_LABELS[phase.phase]}{" "}
-              <em>{phase.configured ? `${phase.node_count} nodes` : "not configured"}</em>
-            </li>
-          ))}
-        </ul>
-      </div>
+      <IntegrationTopologyView
+        key={stateId}
+        landscape={topologyLandscape}
+        selectedRefId={selectedNode?.refId ?? selectedId}
+        onSelectNode={(node) => {
+          setSelectedNode(node);
+          if (node.kind === "contract") {
+            setSelectedId(node.refId);
+            void loadContract(node.refId);
+          }
+        }}
+        onOpenContract={(contractId) => onOpenIntegration?.(contractId, "request")}
+        onOpenCatalog={onOpenCatalog}
+        manualPositions={manualPositions}
+        onMoveNode={(id, position) =>
+          setManualPositions((current) => ({ ...current, [id]: position }))
+        }
+        onArrange={() => setManualPositions({})}
+        showResilience={showResilience}
+        onToggleResilience={() => setShowResilience((value) => !value)}
+        viewport={landscapeViewport}
+        onViewportChange={setLandscapeViewport}
+      />
     );
   }
 
   function renderContract() {
-    if (!detail) {
+    if (!detail || !flow) {
       return <p className="architecture-topbar-hint">Select a contract to inspect its interfaces.</p>;
     }
     return (
@@ -360,17 +335,28 @@ export default function IntegrationWorkbench({
           <div>
             <h3>{detail.contract.name}</h3>
             <p className="architecture-topbar-hint">
-              {detail.contract.interaction_type} · revision {detail.contract.revision}
+              {INTERACTION_TYPE_LABELS[detail.contract.interaction_type] ??
+                detail.contract.interaction_type}{" "}
+              · revision {detail.contract.revision}
             </p>
           </div>
-          <button type="button" className="secondary-button" onClick={() => setPropertiesOpen(true)}>
-            Properties
-          </button>
         </div>
-        <div className="integration-sides">
-          {renderInterfaceSummary("Producer", detail.source_interface)}
-          {renderInterfaceSummary("Consumer", detail.target_interface)}
-        </div>
+        <InterfaceChannelView
+          detail={detail}
+          flow={flow}
+          onSelectInterface={(objectId) => {
+            const node = nodesByRefId.get(objectId);
+            if (node) setSelectedNode(node);
+          }}
+          onSelectSystem={(systemId) => {
+            const node = nodesByRefId.get(systemId);
+            if (node) setSelectedNode(node);
+          }}
+          onOpenContract={(contractId) => onOpenIntegration?.(contractId, "request")}
+          onOpenMapping={(phase) => {
+            if (selectedId) onOpenIntegration?.(selectedId, phase);
+          }}
+        />
       </div>
     );
   }
@@ -380,45 +366,47 @@ export default function IntegrationWorkbench({
       return <p className="architecture-topbar-hint">Select a contract to view its message flow.</p>;
     }
     return (
-      <div className="integration-flow">
+      <>
         <div className="integration-detail-head">
           <div>
             <h3>{flow.contract.name}</h3>
             <p className="architecture-topbar-hint">
-              {flow.contract.source.system_name} → {flow.contract.target.system_name} · revision{" "}
-              {flow.contract.revision}
+              {flow.contract.source.system_name} → {flow.contract.target.system_name} ·{" "}
+              {INTERACTION_TYPE_LABELS[flow.contract.interaction_type] ?? flow.contract.interaction_type} ·
+              revision {flow.contract.revision}
             </p>
           </div>
-          <button type="button" className="secondary-button" onClick={() => setPropertiesOpen(true)}>
-            Properties
-          </button>
         </div>
-        <dl className="integration-flow-meta">
-          <dt>Routing</dt>
-          <dd>{flow.routing || "—"}</dd>
-        </dl>
-        <div className="integration-phases">
-          {flow.phases.map((phase) => (
-            <article key={phase.phase} className="integration-phase">
-              <div className="integration-card-head">
-                <strong>{PHASE_LABELS[phase.phase]}</strong>
-                <span className="integration-badge">{phase.configured ? "configured" : "empty"}</span>
-              </div>
-              <p className="architecture-topbar-hint">
-                {phase.node_count} nodes · {phase.transformation_count} transformations ·{" "}
-                {phase.mapped_target_count}/{phase.target_field_count} target fields mapped
-              </p>
-              {phase.transformations.length > 0 && (
-                <ul className="integration-operations">
-                  {phase.transformations.map((transformation) => (
-                    <li key={transformation.node_id}>{transformation.label}</li>
-                  ))}
-                </ul>
-              )}
-            </article>
-          ))}
-        </div>
-      </div>
+        <FlowDesignerView
+          flow={flow}
+          selectedPhase={selectedPhase}
+          onSelectPhase={setSelectedPhase}
+          onSelectStage={(stage, phase) => {
+            setStageDetail({ stage, phase });
+            const node = nodesByRefId.get(stage.id.replace(/^system:/, "").replace(/^interface:/, ""));
+            if (node && (stage.role === "system" || stage.role === "runtime" || stage.role === "interface")) {
+              setSelectedNode(node);
+            }
+          }}
+          onOpenContract={(contractId) => onOpenIntegration?.(contractId, "request")}
+          onOpenMapping={(phase) => {
+            if (selectedId) onOpenIntegration?.(selectedId, phase);
+          }}
+        />
+        {stageDetail && (
+          <div className="integration-stage-detail" role="status">
+            <strong>{stageDetail.stage.label}</strong>
+            <span>{stageDetail.stage.detail ?? stageDetail.stage.role}</span>
+            <em>
+              {stageDetail.phase}
+              {stageDetail.stage.metadata ? " · metadata only" : ""}
+            </em>
+            <button type="button" onClick={() => setStageDetail(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+      </>
     );
   }
 
@@ -460,13 +448,20 @@ export default function IntegrationWorkbench({
               ) : (
                 <ul className="integration-operations">
                   {phase.transformations.map((transformation) => (
-                    <li key={transformation.node_id}>{transformation.label}</li>
+                    <li key={transformation.node_id}>
+                      <em>{transformation.role}</em> {transformation.label}
+                    </li>
                   ))}
                 </ul>
               )}
               {phase.target_fields.length > 0 && (
                 <p className="architecture-topbar-hint">
-                  Target fields: {phase.target_fields.join(", ")}
+                  Mapped target fields: {phase.target_fields.join(", ")}
+                </p>
+              )}
+              {phase.unmapped_required_fields.length > 0 && (
+                <p className="integration-flow-gap">
+                  Unmapped required target fields: {phase.unmapped_required_fields.join(", ")}
                 </p>
               )}
             </article>
@@ -485,52 +480,24 @@ export default function IntegrationWorkbench({
   }
 
   function renderScenarios() {
-    if (!conformance) {
-      return <p className="architecture-topbar-hint">Select a contract to list its scenarios.</p>;
+    if (!selectedId) {
+      return <p className="architecture-topbar-hint">Select a contract to view its sequence.</p>;
+    }
+    if (!sequence) {
+      return (
+        <p className="architecture-topbar-hint">
+          {sequenceLoading ? "Loading sequence…" : "No sequence available for this contract."}
+        </p>
+      );
     }
     return (
-      <div className="integration-scenarios">
-        <div className="integration-detail-head">
-          <div>
-            <h3>Scenario &amp; Sequence</h3>
-            <p className="architecture-topbar-hint">
-              End-to-end, alternative and error paths recorded against {conformance.contract_name}.
-            </p>
-          </div>
-          {onOpenIntegration && selectedId && (
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => onOpenIntegration(selectedId, "scenarios")}
-            >
-              Open sequence designer
-            </button>
-          )}
-        </div>
-        {scenarioGroups.length === 0 ? (
-          <p className="architecture-topbar-hint">No scenarios reference this contract yet.</p>
-        ) : (
-          scenarioGroups.map((group) => (
-            <section key={group.key} className="integration-scenario-group">
-              <div className="information-section-heading">
-                <strong>{group.label}</strong>
-                <span className="item-count">{group.items.length}</span>
-              </div>
-              <ul className="integration-scenario-list">
-                {group.items.map((scenario) => (
-                  <li key={scenario.id}>
-                    <span className="integration-scenario-name">{scenario.name}</span>
-                    {scenarioStatusBadge(scenario)}
-                    <span className="architecture-topbar-hint">
-                      {scenario.step_count} step{scenario.step_count === 1 ? "" : "s"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))
-        )}
-      </div>
+      <IntegrationSequenceView
+        sequence={sequence}
+        loading={sequenceLoading}
+        selectedScenarioId={selectedScenarioId}
+        onSelectScenario={setSelectedScenarioId}
+        onOpenScenarios={() => onOpenIntegration?.(selectedId, "scenarios")}
+      />
     );
   }
 
@@ -539,18 +506,23 @@ export default function IntegrationWorkbench({
       return <p className="architecture-topbar-hint">Select a contract to review conformance.</p>;
     }
     const summary = conformance.summary ?? {};
+    const spec = selectedContract?.specification ?? {};
+    const missing: string[] = [];
+    if (selectedContract && !selectedContract.producer_interface) missing.push("Producer interface");
+    if (selectedContract && !selectedContract.consumer_interface) missing.push("Consumer interface");
+    if (conformance.request_coverage.mapped === 0) missing.push("Request mapping");
+    if (conformance.scenarios.length === 0) missing.push("Scenario");
+    if (!spec.retry || spec.retry.max_attempts === 0) missing.push("Resilience");
     return (
       <div className="integration-conformance">
         <div className="integration-detail-head">
           <div>
             <h3>Test &amp; Conformance</h3>
             <p className="architecture-topbar-hint">
-              {conformance.contract_name} · revision {conformance.revision}
+              {conformance.contract_name} · revision {conformance.revision} ·{" "}
+              {selectedContract ? STATUS_LABELS[selectedContract.implementation_status] ?? selectedContract.implementation_status : "—"}
             </p>
           </div>
-          <button type="button" className="secondary-button" onClick={() => setPropertiesOpen(true)}>
-            Properties
-          </button>
         </div>
 
         <div className="integration-coverage-grid">
@@ -578,6 +550,17 @@ export default function IntegrationWorkbench({
             </span>
           ))}
         </div>
+
+        {missing.length > 0 && (
+          <div className="integration-missing" role="status">
+            <strong>Outstanding configuration</strong>
+            <ul>
+              {missing.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {conformance.scenarios.length === 0 ? (
           <p className="architecture-topbar-hint">No scenarios reference this contract yet.</p>
@@ -619,6 +602,25 @@ export default function IntegrationWorkbench({
     );
   }
 
+  function renderView() {
+    switch (view) {
+      case "landscape":
+        return renderLandscape();
+      case "contract":
+        return renderContract();
+      case "flow":
+        return renderFlow();
+      case "mapping":
+        return renderMapping();
+      case "scenarios":
+        return renderScenarios();
+      case "conformance":
+        return renderConformance();
+      default:
+        return null;
+    }
+  }
+
   return (
     <div className="integration-workbench">
       <div className="integration-toolbar">
@@ -646,7 +648,9 @@ export default function IntegrationWorkbench({
                   setDetail(null);
                   setFlow(null);
                   setConformance(null);
+                  setSequence(null);
                   setPropertiesOpen(false);
+                  setSelectedNode(null);
                   return;
                 }
                 selectContract(value, view === "landscape" ? "contract" : view);
@@ -675,6 +679,18 @@ export default function IntegrationWorkbench({
             Some canvas changes failed to save.
           </span>
         )}
+        {selectedContract && (
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              setSelectedNode(null);
+              setPropertiesOpen(true);
+            }}
+          >
+            Properties
+          </button>
+        )}
         {onOpenCatalog && (
           <button type="button" className="secondary-button" onClick={onOpenCatalog}>
             Open catalog
@@ -693,11 +709,12 @@ export default function IntegrationWorkbench({
 
       <div className="integration-body">
         <nav className="integration-views" aria-label="Integration views">
-          {VIEWS.map((item) => (
+          {INTEGRATION_VIEWS.map((item) => (
             <button
               key={item.id}
               type="button"
               className={view === item.id ? "active" : ""}
+              title={item.description}
               onClick={() => {
                 integrationLog.info("view changed", { view: item.id });
                 setView(item.id);
@@ -719,16 +736,10 @@ export default function IntegrationWorkbench({
               <h3>No integration landscape available</h3>
               <p>Duplicate the current state into a candidate to design integrations.</p>
             </div>
-          ) : view === "landscape" ? (
-            renderLandscape()
           ) : (
             <>
               {busy && <p className="architecture-topbar-hint">Loading contract…</p>}
-              {view === "contract" && renderContract()}
-              {view === "flow" && renderFlow()}
-              {view === "mapping" && renderMapping()}
-              {view === "scenarios" && renderScenarios()}
-              {view === "conformance" && renderConformance()}
+              {renderView()}
             </>
           )}
         </div>
@@ -745,6 +756,20 @@ export default function IntegrationWorkbench({
             onNavigateTrace={onNavigateTrace}
             onSave={(draft) => void handleSaveProperties(draft)}
             onClose={() => setPropertiesOpen(false)}
+          />
+        )}
+
+        {!propertiesOpen && selectedNode && (
+          <IntegrationObjectPanel
+            node={selectedNode}
+            workspaceId={workspaceId}
+            stateId={stateId || null}
+            interfaces={landscape?.interfaces ?? []}
+            contracts={landscape?.contracts ?? []}
+            onOpenContract={(contractId) => onOpenIntegration?.(contractId, "request")}
+            onOpenCatalog={onOpenCatalog}
+            onNavigateTrace={onNavigateTrace}
+            onClose={() => setSelectedNode(null)}
           />
         )}
       </div>

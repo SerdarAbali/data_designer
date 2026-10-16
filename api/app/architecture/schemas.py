@@ -279,6 +279,128 @@ class InformationRelationshipUpdate(BaseModel):
     target_handle: str | None = Field(default=None, max_length=32)
 
 
+# --- Information Architecture completion projections -------------------------
+# Additive, read-only projections derived from the existing information model,
+# catalog rows, integration contracts and state scoping. No new source of truth.
+
+InformationRealizationStatus = Literal["realized", "partial", "unmapped", "invalid"]
+InformationChangeType = Literal["added", "removed", "changed", "reused"]
+
+
+class InformationConcept(BaseModel):
+    object_id: UUID
+    name: str
+    description: str | None = None
+    owner: str | None = None
+
+
+class InformationConceptRelationship(BaseModel):
+    id: UUID
+    source_object_id: UUID
+    target_object_id: UUID
+    name: str | None = None
+    cardinality: InformationCardinality
+
+
+class InformationConceptualResponse(BaseModel):
+    state_id: UUID
+    concepts: list[InformationConcept]
+    relationships: list[InformationConceptRelationship]
+
+
+class InformationContractRef(BaseModel):
+    id: UUID
+    name: str
+    direction: str
+
+
+class InformationPhysicalMapping(BaseModel):
+    entity_object_id: UUID
+    entity_name: str
+    attribute_object_id: UUID
+    attribute_name: str
+    data_type: str
+    required: bool
+    status: InformationRealizationStatus
+    system_id: UUID | None = None
+    system_name: str | None = None
+    catalog_object_id: UUID | None = None
+    catalog_object_name: str | None = None
+    catalog_field_id: UUID | None = None
+    catalog_field_name: str | None = None
+    contracts: list[InformationContractRef] = Field(default_factory=list)
+
+
+class InformationPhysicalResponse(BaseModel):
+    state_id: UUID
+    mappings: list[InformationPhysicalMapping]
+    summary: dict[str, int]
+
+
+class InformationOwnershipEntry(BaseModel):
+    object_id: UUID
+    name: str
+    owner: str | None = None
+    steward: str | None = None
+    authoritative_system_id: UUID | None = None
+    authoritative_system_name: str | None = None
+    authoritative_in_state: bool = False
+    classification: str | None = None
+    sensitivity: str | None = None
+    realization_count: int = 0
+    systems: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+
+
+class InformationOwnershipResponse(BaseModel):
+    state_id: UUID
+    entries: list[InformationOwnershipEntry]
+
+
+class InformationLineageNode(BaseModel):
+    id: str
+    kind: str
+    name: str
+    detail: str | None = None
+    system_name: str | None = None
+    catalog_field_id: UUID | None = None
+    contract_id: UUID | None = None
+
+
+class InformationLineageEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    relation: str
+
+
+class InformationLineageResponse(BaseModel):
+    state_id: UUID
+    nodes: list[InformationLineageNode]
+    edges: list[InformationLineageEdge]
+    gaps: list[str]
+
+
+class InformationImpactChange(BaseModel):
+    object_type: str
+    object_id: UUID
+    name: str
+    entity_object_id: UUID | None = None
+    entity_name: str | None = None
+    change: InformationChangeType
+    changed_fields: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class InformationImpactResponse(BaseModel):
+    state_id: UUID
+    baseline_state_id: UUID | None = None
+    supported: bool
+    changes: list[InformationImpactChange]
+    unresolved: list[str]
+    summary: dict[str, int]
+
+
 SolutionInterfaceDirection = Literal["provided", "required"]
 SolutionOperationKind = Literal["operation", "event", "command", "query"]
 SolutionInterfaceKind = Literal["sync", "async"]
@@ -569,6 +691,7 @@ class EnterpriseApplicationResponse(BaseModel):
     object_id: UUID
     name: str
     kind: str
+    description: str | None = None
 
 
 class EnterpriseLinkResponse(BaseModel):

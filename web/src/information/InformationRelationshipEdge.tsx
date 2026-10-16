@@ -22,6 +22,15 @@ export type InformationRelationshipFlowEdge = Edge<
 
 const EDGE_COLOR = "var(--discipline-information, #368c86)";
 
+/** Distance from the handle centre to a cardinality label, outside the border. */
+const ENDPOINT_LABEL_OFFSET = 32;
+
+/** Distance from the handle centre to a crow's-foot marker, outside the border. */
+const CROWFOOT_OFFSET = 10;
+
+/** Minimum clearance kept between the relationship name and an endpoint label. */
+const MIN_LABEL_GAP = 34;
+
 /** Direction the connector leaves the entity box for a given handle side. */
 function outward(position: Position): { x: number; y: number } {
   switch (position) {
@@ -115,6 +124,26 @@ export default function InformationRelationshipEdge({
   const sourceDir = outward(sourcePosition);
   const targetDir = outward(targetPosition);
 
+  // Cardinality labels sit a fixed offset outside the border, per handle side.
+  const sourceLabel = {
+    x: sourceX + sourceDir.x * ENDPOINT_LABEL_OFFSET,
+    y: sourceY + sourceDir.y * ENDPOINT_LABEL_OFFSET,
+  };
+  const targetLabel = {
+    x: targetX + targetDir.x * ENDPOINT_LABEL_OFFSET,
+    y: targetY + targetDir.y * ENDPOINT_LABEL_OFFSET,
+  };
+
+  // Keep the relationship name clear of both endpoint cardinality labels.
+  let nameX = labelX;
+  let nameY = labelY;
+  const tooClose = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.hypot(a.x - b.x, a.y - b.y) < MIN_LABEL_GAP;
+  if (tooClose({ x: nameX, y: nameY }, sourceLabel) || tooClose({ x: nameX, y: nameY }, targetLabel)) {
+    nameX = (sourceLabel.x + targetLabel.x) / 2;
+    nameY = (sourceLabel.y + targetLabel.y) / 2;
+  }
+
   return (
     <>
       <BaseEdge
@@ -126,41 +155,37 @@ export default function InformationRelationshipEdge({
         <EdgeLabelRenderer>
           {notation.source.includes("*") && (
             <CrowFoot
-              x={sourceX + sourceDir.x * 9}
-              y={sourceY + sourceDir.y * 9}
+              x={sourceX + sourceDir.x * CROWFOOT_OFFSET}
+              y={sourceY + sourceDir.y * CROWFOOT_OFFSET}
               position={sourcePosition}
             />
           )}
           <div
             className="information-edge-endpoint"
             style={{
-              transform: `translate(-50%, -50%) translate(${sourceX + sourceDir.x * 26}px, ${
-                sourceY + sourceDir.y * 26
-              }px)`,
+              transform: `translate(-50%, -50%) translate(${sourceLabel.x}px, ${sourceLabel.y}px)`,
             }}
           >
             {notation.source}
           </div>
           {notation.target.includes("*") && (
             <CrowFoot
-              x={targetX + targetDir.x * 9}
-              y={targetY + targetDir.y * 9}
+              x={targetX + targetDir.x * CROWFOOT_OFFSET}
+              y={targetY + targetDir.y * CROWFOOT_OFFSET}
               position={targetPosition}
             />
           )}
           <div
             className="information-edge-endpoint"
             style={{
-              transform: `translate(-50%, -50%) translate(${targetX + targetDir.x * 26}px, ${
-                targetY + targetDir.y * 26
-              }px)`,
+              transform: `translate(-50%, -50%) translate(${targetLabel.x}px, ${targetLabel.y}px)`,
             }}
           >
             {notation.target}
           </div>
           <div
             className="information-edge-label"
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            style={{ transform: `translate(-50%, -50%) translate(${nameX}px, ${nameY}px)` }}
           >
             <span className="information-edge-name">
               {relationship.name || "relates to"}

@@ -284,6 +284,9 @@ describe("workbench trace navigation", () => {
     vi.mocked(fetch).mockImplementation(async (path) => {
       const url = String(path);
       if (url.includes("/enterprise/model")) return reply(enterpriseModel);
+      if (url.includes("/enterprise/strategy-trace")) {
+        return reply({ state_id: candidate.id, chains: [], unlinked_requirements: [], gaps: [] });
+      }
       if (url.includes("/usages")) return reply(usages);
       if (url.includes("/integration-design/landscape")) {
         return reply({ state_id: candidate.id, state_type: "candidate", editable: true, contracts: [contract], interfaces: [] });
@@ -313,6 +316,7 @@ describe("workbench trace navigation", () => {
     });
 
     render(<ArchitectureCanvas {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Objects" }));
     fireEvent.click(await screen.findByRole("button", { name: /Payment processing/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Traceability" }));
     fireEvent.click(await screen.findByRole("button", { name: /Customer push/ }));

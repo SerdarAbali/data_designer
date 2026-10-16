@@ -1,5 +1,7 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
+import { handleId, type FlowSide } from "../../components/architecture/architectureRouting";
+
 export type SolutionSystemNodeData = {
   name: string;
   kind: string;
@@ -10,6 +12,13 @@ export type SolutionSystemNodeData = {
 
 export type SolutionSystemFlowNode = Node<SolutionSystemNodeData, "solutionSystem">;
 
+const SIDES: { side: FlowSide; position: Position }[] = [
+  { side: "top", position: Position.Top },
+  { side: "right", position: Position.Right },
+  { side: "bottom", position: Position.Bottom },
+  { side: "left", position: Position.Left },
+];
+
 export default function SolutionSystemNode({ data, selected }: NodeProps<SolutionSystemFlowNode>) {
   return (
     <article
@@ -17,10 +26,12 @@ export default function SolutionSystemNode({ data, selected }: NodeProps<Solutio
       aria-label={`${data.external ? "External system" : "Member system"} ${data.name}`}
       data-object-id={data.objectId}
     >
-      <Handle type="target" position={Position.Top} isConnectable={data.editable} />
-      <Handle type="source" position={Position.Bottom} isConnectable={data.editable} />
-      <Handle type="target" position={Position.Right} isConnectable={data.editable} />
-      <Handle type="source" position={Position.Left} isConnectable={data.editable} />
+      {SIDES.map(({ side, position }) => (
+        <Handle key={`t-${side}`} id={handleId("target", side)} type="target" position={position} isConnectable={data.editable} />
+      ))}
+      {SIDES.map(({ side, position }) => (
+        <Handle key={`s-${side}`} id={handleId("source", side)} type="source" position={position} isConnectable={data.editable} />
+      ))}
       <header>
         <span className="solution-system-node-icon" aria-hidden="true">{data.external ? "◇" : "▧"}</span>
         <strong title={data.name}>{data.name}</strong>

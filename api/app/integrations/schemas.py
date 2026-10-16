@@ -413,6 +413,8 @@ OperationKind = Literal["operation", "event", "command", "query"]
 ContractStatus = Literal["draft", "in_progress", "built", "verified", "attention"]
 ScenarioConformanceStatus = Literal["passing", "failing", "not_run", "outdated"]
 FlowPhaseName = Literal["request", "success-response", "async-response", "error-response"]
+FlowNodeRole = Literal["validation", "routing", "transformation", "constant"]
+ChannelKind = Literal["api", "event", "file"]
 
 
 class IntegrationOperationSummary(BaseModel):
@@ -444,6 +446,8 @@ class IntegrationEndpointRef(BaseModel):
     system_name: str
     object_id: UUID
     object_name: str
+    system_kind: str | None = None
+    is_runtime: bool = False
 
 
 class IntegrationContractSummary(BaseModel):
@@ -464,6 +468,7 @@ class IntegrationContractSummary(BaseModel):
     has_response_graph: bool = False
     has_error_graph: bool = False
     specification: dict[str, JsonValue] = Field(default_factory=dict)
+    idempotency_key_field_name: str | None = None
     target_fields_mapped: int = 0
     target_fields_total: int = 0
     scenario_count: int = 0
@@ -481,6 +486,8 @@ class IntegrationFlowTransformation(BaseModel):
     node_id: UUID
     type: str
     label: str
+    role: FlowNodeRole = "transformation"
+    position: dict[str, float] | None = None
 
 
 class IntegrationFlowPhase(BaseModel):
@@ -493,12 +500,15 @@ class IntegrationFlowPhase(BaseModel):
     target_field_count: int = 0
     mapped_target_count: int = 0
     target_fields: list[str] = Field(default_factory=list)
+    unmapped_required_fields: list[str] = Field(default_factory=list)
 
 
 class IntegrationMessageFlowResponse(BaseModel):
     contract: IntegrationContractSummary
     routing: str = ""
     trigger_config: dict[str, JsonValue] = Field(default_factory=dict)
+    channel_kind: ChannelKind | None = None
+    channel_label: str | None = None
     phases: list[IntegrationFlowPhase] = Field(default_factory=list)
 
 
@@ -536,3 +546,41 @@ class IntegrationConformanceResponse(BaseModel):
     error_coverage: IntegrationCoverage = Field(default_factory=IntegrationCoverage)
     scenarios: list[IntegrationScenarioStatus] = Field(default_factory=list)
     summary: dict[str, int] = Field(default_factory=dict)
+
+
+class IntegrationSequenceParticipant(BaseModel):
+    id: str
+    label: str
+    kind: str
+    system_id: UUID | None = None
+    system_name: str | None = None
+    is_runtime: bool = False
+
+
+class IntegrationSequenceInteraction(BaseModel):
+    id: str
+    kind: str
+    phase: str | None = None
+    from_id: str | None = None
+    to_id: str | None = None
+    label: str
+    contract_step: bool = False
+
+
+class IntegrationScenarioSequence(BaseModel):
+    id: UUID
+    name: str
+    category: str
+    status: ScenarioConformanceStatus = "not_run"
+    revision: int
+    outdated: bool = False
+    step_count: int = 0
+    participants: list[IntegrationSequenceParticipant] = Field(default_factory=list)
+    interactions: list[IntegrationSequenceInteraction] = Field(default_factory=list)
+
+
+class IntegrationSequenceResponse(BaseModel):
+    contract_id: UUID
+    contract_name: str
+    revision: int
+    scenarios: list[IntegrationScenarioSequence] = Field(default_factory=list)

@@ -10,10 +10,17 @@ import {
   type InformationEntity,
 } from "./informationModel";
 
-vi.mock("@xyflow/react", () => ({
-  Position: { Left: "left", Right: "right" },
-  Handle: () => null,
-}));
+vi.mock("@xyflow/react", async () => {
+  const React = await import("react");
+  return {
+    Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
+    Handle: (props: { id?: string; style?: unknown }) =>
+      React.createElement("div", {
+        "data-testid": `handle-${props.id}`,
+        "data-handle-style": JSON.stringify(props.style ?? null),
+      }),
+  };
+});
 
 const entity: InformationEntity = {
   object_id: "ent-1",
@@ -67,6 +74,42 @@ describe("InformationEntityNode", () => {
     render(<InformationEntityNode {...nodeProps({ entity, editable: true, selectedAttributeId: null, onSelectAttribute })} />);
     fireEvent.click(screen.getByRole("button", { name: /customer_id/ }));
     expect(onSelectAttribute).toHaveBeenCalledWith("attr-1");
+  });
+
+  it("shows an inline empty state and marks unmapped attributes", () => {
+    render(<InformationEntityNode {...nodeProps({ entity, editable: true, selectedAttributeId: null, onSelectAttribute: vi.fn() })} />);
+    expect(screen.getByText("unmapped")).toBeTruthy();
+
+    const empty = { ...entity, attributes: [] };
+    render(<InformationEntityNode {...nodeProps({ entity: empty, editable: true, selectedAttributeId: null, onSelectAttribute: vi.fn() })} />);
+    expect(screen.getByText("No attributes yet")).toBeTruthy();
+  });
+
+  it("filters visible attributes and reports when none match", () => {
+    render(
+      <InformationEntityNode
+        {...nodeProps({
+          entity,
+          editable: true,
+          selectedAttributeId: null,
+          onSelectAttribute: vi.fn(),
+          attributeFilter: "does-not-exist",
+        })}
+      />,
+    );
+    expect(screen.getByText("No attributes match the filter")).toBeTruthy();
+  });
+
+  it("anchors left/right handles in the header band and just outside the border", () => {
+    render(<InformationEntityNode {...nodeProps({ entity, editable: true, selectedAttributeId: null, onSelectAttribute: vi.fn() })} />);
+    const style = (id: string) =>
+      JSON.parse(screen.getByTestId(`handle-${id}`).getAttribute("data-handle-style") ?? "null");
+    // Left/right automatic connectors clear the attribute rows (header band).
+    expect(style("s-right")).toEqual({ top: 22, right: -6 });
+    expect(style("t-left")).toEqual({ top: 22, left: -6 });
+    // Top/bottom handles already sit outside the rows; keep them outside the border.
+    expect(style("s-top")).toEqual({ top: -6 });
+    expect(style("t-bottom")).toEqual({ bottom: -6 });
   });
 
   it("renders cardinality notation", () => {

@@ -5,10 +5,12 @@ from __future__ import annotations
 from app.models import (
     ArchitectureInterface,
     DataRepository,
+    DeploymentNode,
     InterfaceOperation,
     SolutionBoundary,
     SolutionComponent,
     SolutionMember,
+    TrustBoundary,
 )
 
 from .context import DemoContext
@@ -20,7 +22,7 @@ COMPONENTS: list[dict] = [
         "type": "application",
         "technology": "React",
         "responsibility": "Capture customer details and consent.",
-        "position": {"x": 120, "y": 520},
+        "position": {"x": 120, "y": 220},
     },
     {
         "key": "solution.component.onboarding",
@@ -28,7 +30,7 @@ COMPONENTS: list[dict] = [
         "type": "service",
         "technology": "Java",
         "responsibility": "Orchestrate verification, activation and billing setup.",
-        "position": {"x": 460, "y": 520},
+        "position": {"x": 460, "y": 220},
     },
     {
         "key": "solution.component.connector",
@@ -36,7 +38,15 @@ COMPONENTS: list[dict] = [
         "type": "service",
         "technology": "Go",
         "responsibility": "Publish customer events to the Integration Runtime.",
-        "position": {"x": 800, "y": 520},
+        "position": {"x": 800, "y": 220},
+    },
+    {
+        "key": "solution.component.billing_adapter",
+        "name": "Billing Adapter",
+        "type": "service",
+        "technology": "Java",
+        "responsibility": "Translate onboarding requests into billing operations.",
+        "position": {"x": 1140, "y": 220},
     },
 ]
 
@@ -51,6 +61,15 @@ INTERFACES: list[dict] = [
         "technology": "REST",
     },
     {
+        "key": "iface.portal_onboarding_api",
+        "component": "solution.component.portal",
+        "name": "Onboarding API",
+        "direction": "required",
+        "kind": "sync",
+        "protocol": "HTTPS",
+        "technology": "REST",
+    },
+    {
         "key": "iface.billing_api",
         "component": "solution.component.onboarding",
         "name": "Billing API",
@@ -60,10 +79,37 @@ INTERFACES: list[dict] = [
         "technology": "REST",
     },
     {
+        "key": "iface.billing_provided_api",
+        "component": "solution.component.billing_adapter",
+        "name": "Billing API",
+        "direction": "provided",
+        "kind": "sync",
+        "protocol": "HTTPS",
+        "technology": "REST",
+    },
+    {
         "key": "iface.customer_event",
         "component": "solution.component.connector",
+        "name": "Customer Event Stream",
+        "direction": "provided",
+        "kind": "async",
+        "protocol": "AMQP",
+        "technology": "RabbitMQ",
+    },
+    {
+        "key": "iface.onboarding_customer_event",
+        "component": "solution.component.onboarding",
         "name": "Customer Event",
         "direction": "provided",
+        "kind": "async",
+        "protocol": "AMQP",
+        "technology": "RabbitMQ",
+    },
+    {
+        "key": "iface.connector_customer_event",
+        "component": "solution.component.connector",
+        "name": "Customer Event",
+        "direction": "required",
         "kind": "async",
         "protocol": "AMQP",
         "technology": "RabbitMQ",
@@ -83,6 +129,73 @@ OPERATIONS: list[dict] = [
         "name": "customerCreated",
         "kind": "event",
     },
+]
+
+DEPLOYMENTS: list[dict] = [
+    {
+        "key": "solution.deployment.web",
+        "name": "Public Web Tier",
+        "environment": "production",
+        "hosting": "container",
+        "technology": "NGINX",
+        "description": "Internet-facing hosting for the customer portal (synthetic demo).",
+    },
+    {
+        "key": "solution.deployment.services",
+        "name": "Core Services",
+        "environment": "production",
+        "hosting": "container",
+        "technology": "Kubernetes",
+        "description": "Internal service cluster for onboarding and integration (synthetic demo).",
+    },
+]
+
+TRUST_BOUNDARIES: list[dict] = [
+    {
+        "key": "solution.trust.public",
+        "name": "Public Network",
+        "security_level": "public",
+        "description": "Untrusted internet-facing zone (synthetic demo).",
+    },
+    {
+        "key": "solution.trust.internal",
+        "name": "Internal Network",
+        "security_level": "internal",
+        "description": "Restricted internal service zone (synthetic demo).",
+    },
+]
+
+# component -> deployment key and component -> trust boundary key
+COMPONENT_DEPLOYMENT: dict[str, str] = {
+    "solution.component.portal": "solution.deployment.web",
+    "solution.component.onboarding": "solution.deployment.services",
+    "solution.component.connector": "solution.deployment.services",
+    "solution.component.billing_adapter": "solution.deployment.services",
+}
+
+COMPONENT_TRUST: dict[str, str] = {
+    "solution.component.portal": "solution.trust.public",
+    "solution.component.onboarding": "solution.trust.internal",
+    "solution.component.connector": "solution.trust.internal",
+    "solution.component.billing_adapter": "solution.trust.internal",
+}
+
+# interface -> trust boundary it crosses
+INTERFACE_TRUST: dict[str, str] = {
+    "iface.portal_onboarding_api": "solution.trust.public",
+    "iface.onboarding_api": "solution.trust.internal",
+    "iface.billing_api": "solution.trust.internal",
+    "iface.billing_provided_api": "solution.trust.internal",
+    "iface.onboarding_customer_event": "solution.trust.internal",
+    "iface.connector_customer_event": "solution.trust.internal",
+    "iface.customer_event": "solution.trust.internal",
+}
+
+# (required interface, provided interface) pairs that compose the solution flow.
+CONNECTS_TO: list[tuple[str, str]] = [
+    ("iface.portal_onboarding_api", "iface.onboarding_api"),
+    ("iface.billing_api", "iface.billing_provided_api"),
+    ("iface.connector_customer_event", "iface.onboarding_customer_event"),
 ]
 
 
@@ -152,10 +265,10 @@ def build_solution(db, ctx: DemoContext) -> None:
         "candidate",
         "solution.onboarding",
         solution_id,
-        {"x": 120, "y": 300},
+        {"x": 60, "y": 40},
         discipline="solution",
-        width=1180.0,
-        height=520.0,
+        width=1000.0,
+        height=460.0,
     )
 
     for key in ("crm", "billing", "integration_runtime"):
@@ -174,7 +287,7 @@ def build_solution(db, ctx: DemoContext) -> None:
             "candidate",
             f"solution.system.{key}",
             ctx.id(f"system.{key}"),
-            {"x": 120 + 300 * list(SYSTEM_ORDER).index(key), "y": 60},
+            {"x": 120 + 300 * list(SYSTEM_ORDER).index(key), "y": 80},
             discipline="solution",
         )
 
@@ -218,6 +331,43 @@ def build_solution(db, ctx: DemoContext) -> None:
             updated_at=now,
         )
     )
+
+    deployment_rows = [ctx.registry(spec["key"], "deployment_node") for spec in DEPLOYMENTS]
+    trust_rows = [ctx.registry(spec["key"], "trust_boundary") for spec in TRUST_BOUNDARIES]
+    db.add_all(deployment_rows)
+    db.add_all(trust_rows)
+    for spec in DEPLOYMENTS:
+        db.add(
+            DeploymentNode(
+                object_id=ctx.id(spec["key"]),
+                tenant_id=ctx.tenant_id,
+                solution_object_id=solution_id,
+                name=spec["name"],
+                description=spec["description"],
+                technology=spec["technology"],
+                environment=spec["environment"],
+                hosting=spec["hosting"],
+                properties={},
+                created_in_state_id=candidate,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    for spec in TRUST_BOUNDARIES:
+        db.add(
+            TrustBoundary(
+                object_id=ctx.id(spec["key"]),
+                tenant_id=ctx.tenant_id,
+                solution_object_id=solution_id,
+                name=spec["name"],
+                description=spec["description"],
+                security_level=spec["security_level"],
+                properties={},
+                created_in_state_id=candidate,
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
     db.add_all(
         [
@@ -277,6 +427,45 @@ def build_solution(db, ctx: DemoContext) -> None:
             ),
         ]
     )
+
+    platform_links = []
+    for component_key, deployment_key in COMPONENT_DEPLOYMENT.items():
+        platform_links.append(
+            ctx.relationship(
+                f"sol.link.deploy.{component_key}",
+                ctx.id(component_key),
+                ctx.id(deployment_key),
+                "deployed_on",
+            )
+        )
+    for component_key, trust_key in COMPONENT_TRUST.items():
+        platform_links.append(
+            ctx.relationship(
+                f"sol.link.contained.{component_key}",
+                ctx.id(component_key),
+                ctx.id(trust_key),
+                "contained_in",
+            )
+        )
+    for interface_key, trust_key in INTERFACE_TRUST.items():
+        platform_links.append(
+            ctx.relationship(
+                f"sol.link.crosses.{interface_key}",
+                ctx.id(interface_key),
+                ctx.id(trust_key),
+                "crosses",
+            )
+        )
+    for required_key, provided_key in CONNECTS_TO:
+        platform_links.append(
+            ctx.relationship(
+                f"sol.link.connects.{required_key}",
+                ctx.id(required_key),
+                ctx.id(provided_key),
+                "connects_to",
+            )
+        )
+    db.add_all(platform_links)
 
 
 SYSTEM_ORDER = ("crm", "billing", "integration_runtime")

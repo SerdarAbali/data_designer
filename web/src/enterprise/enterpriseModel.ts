@@ -123,7 +123,7 @@ export type EnterpriseObject = {
   created_in_state_id: string | null;
 };
 
-export type EnterpriseApplication = { object_id: string; name: string; kind: string };
+export type EnterpriseApplication = { object_id: string; name: string; kind: string; description?: string | null };
 
 export type EnterpriseLink = {
   id: string;

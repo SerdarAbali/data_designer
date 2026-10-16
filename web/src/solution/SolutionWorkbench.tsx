@@ -55,7 +55,7 @@ import SolutionDecompositionView from "./SolutionDecompositionView";
 import SolutionDeploymentView from "./SolutionDeploymentView";
 import SolutionInteractionView from "./SolutionInteractionView";
 import SolutionTrustView from "./SolutionTrustView";
-import type { Point } from "./solutionCanvasModel";
+import { contextGraph, decompositionGraph, type Point } from "./solutionCanvasModel";
 
 type Props = {
   workspaceId: string;
@@ -348,6 +348,43 @@ export default function SolutionWorkbench({
     [mutateActive],
   );
 
+  // Recomputes the current view's layout and persists the new positions. Current
+  // (read-only) states never reach here because the action is disabled.
+  const handleAutoArrange = useCallback(() => {
+    if (!design || !isEditable || !mutateActive) return;
+    if (view === "context") {
+      const graph = contextGraph(design, activeState, { auto: true });
+      const moves = graph.systems.filter((system) => system.occurrenceId);
+      if (moves.length === 0) return;
+      mutateActive((state) =>
+        moves.reduce((next, move) => moveOccurrence(next, move.occurrenceId, move.position), state),
+      );
+      return;
+    }
+    if (view === "decomposition") {
+      const graph = decompositionGraph(design, activeState, { auto: true });
+      const positionByObject = new Map(
+        graph.components.map((item) => [item.component.object_id, item.position]),
+      );
+      setDesign((current) =>
+        current
+          ? {
+              ...current,
+              components: current.components.map((component) => {
+                const position = positionByObject.get(component.object_id);
+                return position ? { ...component, position } : component;
+              }),
+            }
+          : current,
+      );
+      const moves = graph.components.filter((item) => item.occurrenceId);
+      if (moves.length === 0) return;
+      mutateActive((state) =>
+        moves.reduce((next, move) => moveOccurrence(next, move.occurrenceId, move.position), state),
+      );
+    }
+  }, [design, isEditable, mutateActive, view, activeState]);
+
   const changeMembership = useCallback(
     (action: () => Promise<SolutionDesign>) => {
       void run(async () => {
@@ -496,6 +533,17 @@ export default function SolutionWorkbench({
           + New solution
         </button>
         {design && toolbarAddMenu}
+        {(view === "context" || view === "decomposition") && design && (
+          <button
+            type="button"
+            className="secondary-button solution-auto-arrange"
+            disabled={!isEditable || busy}
+            title={isEditable ? "Recompute and save the layout for this view" : "Current state is read-only"}
+            onClick={() => handleAutoArrange()}
+          >
+            Auto arrange
+          </button>
+        )}
         <span className="solution-toolbar-hint">
           {isEditable ? "Model components, interfaces, operations and their links." : "Current state is read-only. Duplicate it to model changes."}
         </span>

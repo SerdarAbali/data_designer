@@ -369,3 +369,163 @@ export function deleteInformationRelationship(
     },
   );
 }
+
+// --- Completion projections --------------------------------------------------
+// Read-only views derived from the canonical model, catalog and contracts.
+
+export type InformationConcept = {
+  object_id: string;
+  name: string;
+  description: string | null;
+  owner: string | null;
+};
+
+export type InformationConceptRelationship = {
+  id: string;
+  source_object_id: string;
+  target_object_id: string;
+  name: string | null;
+  cardinality: InformationCardinality;
+};
+
+export type InformationConceptual = {
+  state_id: string;
+  concepts: InformationConcept[];
+  relationships: InformationConceptRelationship[];
+};
+
+export type InformationRealizationStatus = "realized" | "partial" | "unmapped" | "invalid";
+
+export type InformationContractRef = {
+  id: string;
+  name: string;
+  direction: string;
+};
+
+export type InformationPhysicalMapping = {
+  entity_object_id: string;
+  entity_name: string;
+  attribute_object_id: string;
+  attribute_name: string;
+  data_type: string;
+  required: boolean;
+  status: InformationRealizationStatus;
+  system_id: string | null;
+  system_name: string | null;
+  catalog_object_id: string | null;
+  catalog_object_name: string | null;
+  catalog_field_id: string | null;
+  catalog_field_name: string | null;
+  contracts: InformationContractRef[];
+};
+
+export type InformationPhysical = {
+  state_id: string;
+  mappings: InformationPhysicalMapping[];
+  summary: Record<string, number>;
+};
+
+export type InformationOwnershipEntry = {
+  object_id: string;
+  name: string;
+  owner: string | null;
+  steward: string | null;
+  authoritative_system_id: string | null;
+  authoritative_system_name: string | null;
+  authoritative_in_state: boolean;
+  classification: string | null;
+  sensitivity: string | null;
+  realization_count: number;
+  systems: string[];
+  issues: string[];
+};
+
+export type InformationOwnership = {
+  state_id: string;
+  entries: InformationOwnershipEntry[];
+};
+
+export type InformationLineageNode = {
+  id: string;
+  kind: string;
+  name: string;
+  detail: string | null;
+  system_name: string | null;
+  catalog_field_id: string | null;
+  contract_id: string | null;
+};
+
+export type InformationLineageEdge = {
+  id: string;
+  source: string;
+  target: string;
+  relation: string;
+};
+
+export type InformationLineage = {
+  state_id: string;
+  nodes: InformationLineageNode[];
+  edges: InformationLineageEdge[];
+  gaps: string[];
+};
+
+export type InformationChangeType = "added" | "removed" | "changed" | "reused";
+
+export type InformationImpactChange = {
+  object_type: string;
+  object_id: string;
+  name: string;
+  entity_object_id: string | null;
+  entity_name: string | null;
+  change: InformationChangeType;
+  changed_fields: string[];
+  reason: string | null;
+};
+
+export type InformationImpact = {
+  state_id: string;
+  baseline_state_id: string | null;
+  supported: boolean;
+  changes: InformationImpactChange[];
+  unresolved: string[];
+  summary: Record<string, number>;
+};
+
+function projectionPath(workspaceId: string, stateId: string, projection: string): string {
+  return `${informationPath(workspaceId)}/${projection}?state_id=${encodeURIComponent(stateId)}`;
+}
+
+export function fetchInformationConceptual(
+  workspaceId: string,
+  stateId: string,
+): Promise<InformationConceptual> {
+  return api<InformationConceptual>(projectionPath(workspaceId, stateId, "conceptual"));
+}
+
+export function fetchInformationPhysical(
+  workspaceId: string,
+  stateId: string,
+): Promise<InformationPhysical> {
+  return api<InformationPhysical>(projectionPath(workspaceId, stateId, "physical"));
+}
+
+export function fetchInformationOwnership(
+  workspaceId: string,
+  stateId: string,
+): Promise<InformationOwnership> {
+  return api<InformationOwnership>(projectionPath(workspaceId, stateId, "ownership"));
+}
+
+export function fetchInformationLineage(
+  workspaceId: string,
+  stateId: string,
+): Promise<InformationLineage> {
+  return api<InformationLineage>(projectionPath(workspaceId, stateId, "lineage"));
+}
+
+export function fetchInformationImpact(
+  workspaceId: string,
+  stateId: string,
+): Promise<InformationImpact> {
+  return api<InformationImpact>(projectionPath(workspaceId, stateId, "impact"));
+}

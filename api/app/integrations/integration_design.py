@@ -37,7 +37,11 @@ from app.integrations.schemas import (
     IntegrationLandscapeResponse,
     IntegrationMessageFlowResponse,
     IntegrationOperationSummary,
+    IntegrationScenarioSequence,
     IntegrationScenarioStatus,
+    IntegrationSequenceInteraction,
+    IntegrationSequenceParticipant,
+    IntegrationSequenceResponse,
 )
 from app.models import (
     ArchitectureInterface,
@@ -74,6 +78,57 @@ TARGET_DIRECTIONS = {
     "async-response": "response_target",
     "error-response": "error_response_target",
 }
+
+# A system counts as an integration runtime only when the modelled data proves it:
+# its catalog kind is an explicit runtime kind, or its name names a runtime.
+RUNTIME_SYSTEM_KINDS = {"integration_runtime", "integration_runtime_platform", "esb", "runtime"}
+EVENT_PATTERNS = {"publish_subscribe", "event_streaming", "message_queue"}
+FILE_PATTERNS = {"file_transfer", "batch"}
+API_PATTERNS = {"request_reply", "api_gateway", "orchestration", "point_to_point"}
+API_PROTOCOLS = {"https", "http", "rest", "grpc", "soap", "graphql"}
+FLOW_ROLE_BY_NODE = {"validate": "validation", "ifelse": "routing", "constant": "constant"}
+
+
+def _is_runtime_system(system: CatalogSystem | None) -> bool:
+    if system is None:
+        return False
+    if (system.kind or "").strip().lower() in RUNTIME_SYSTEM_KINDS:
+        return True
+    return "runtime" in (system.name or "").strip().lower()
+
+
+def _channel(
+    integration: Integration,
+    producer: ArchitectureInterface | None,
+    consumer: ArchitectureInterface | None,
+) -> tuple[str | None, str | None]:
+    """Derive the modelled exchange channel from pattern and interface metadata only."""
+    interfaces = [item for item in (producer, consumer) if item is not None]
+    kinds = {(item.interface_kind or "").strip().lower() for item in interfaces}
+    protocols = {(item.protocol or "").strip().lower() for item in interfaces}
+    pattern = integration.pattern
+    if pattern in EVENT_PATTERNS or "async" in kinds:
+        return "event", "Event / topic"
+    if pattern in FILE_PATTERNS:
+        return "file", "File exchange"
+    if pattern in API_PATTERNS or "sync" in kinds or bool(protocols & API_PROTOCOLS):
+        return "api", "API endpoint"
+    return None, None
+
+
+def _flow_role(node_type: str) -> str:
+    return FLOW_ROLE_BY_NODE.get(node_type, "transformation")
+
+
+def _participant_for_system(
+    system_by_participant: dict[str, UUID | None], system_id: UUID | None
+) -> str | None:
+    if system_id is None:
+        return None
+    for participant_id, candidate in system_by_participant.items():
+        if candidate == system_id:
+            return participant_id
+    return None
 
 
 def _require_integration(workspace: Workspace) -> None:
@@ -231,6 +286,20 @@ def _active_field_names(db: Session, workspace: Workspace, object_id: UUID) -> d
     }
 
 
+def _required_field_names(db: Session, workspace: Workspace, object_id: UUID) -> dict[UUID, str]:
+    return {
+        field.id: field.name
+        for field in db.scalars(
+            select(CatalogField).where(
+                CatalogField.tenant_id == workspace.tenant_id,
+                CatalogField.object_id == object_id,
+                CatalogField.deleted_at.is_(None),
+                CatalogField.required.is_(True),
+            )
+        )
+    }
+
+
 def _endpoint(
     systems: dict[UUID, CatalogSystem],
     objects: dict[UUID, CatalogObject],
@@ -244,6 +313,8 @@ def _endpoint(
         system_name=system.name if system else "Unknown system",
         object_id=object_id,
         object_name=obj.label if obj else "Unknown object",
+        system_kind=system.kind if system else None,
+        is_runtime=_is_runtime_system(system),
     )
 
 
@@ -252,6 +323,36 @@ def _contract_status(integration: Integration, mapped: int) -> str:
     if base in ("built", "verified") and mapped == 0:
         return "attention"
     return base
+
+
+def _resolve_idempotency_key_name(
+    db: Session,
+    workspace: Workspace,
+    integration: Integration,
+    specification: dict,
+) -> str | None:
+    """Human-readable name for the configured idempotency key field.
+
+    The specification stores a field id; surfaces that only have the contract
+    summary (landscape, resilience, message flow) need the field name so they do
+    not display a raw UUID. Resolution is best-effort: an unknown or malformed id
+    simply yields ``None`` so the caller falls back to a generic label.
+    """
+
+    raw = specification.get("idempotency_key_field_id")
+    if not raw:
+        return None
+    try:
+        field_id = UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
+    for object_id in (integration.source_object_id, integration.target_object_id):
+        if object_id is None:
+            continue
+        name = _active_field_names(db, workspace, object_id).get(field_id)
+        if name:
+            return name
+    return None
 
 
 def _contract_summary(
@@ -267,6 +368,10 @@ def _contract_summary(
 ) -> IntegrationContractSummary:
     target_fields = _active_field_names(db, workspace, integration.target_object_id)
     mapped = refs.get("target", set()) & set(target_fields)
+    specification = integration.specification or {}
+    idempotency_key_field_name = _resolve_idempotency_key_name(
+        db, workspace, integration, specification
+    )
     return IntegrationContractSummary(
         id=integration.id,
         name=integration.name,
@@ -288,7 +393,8 @@ def _contract_summary(
         has_request_graph=bool((integration.graph or {}).get("nodes")),
         has_response_graph=bool((integration.response_graph or {}).get("nodes")),
         has_error_graph=bool((integration.error_response_graph or {}).get("nodes")),
-        specification=integration.specification or {},
+        specification=specification,
+        idempotency_key_field_name=idempotency_key_field_name,
         target_fields_mapped=len(mapped),
         target_fields_total=len(target_fields),
         scenario_count=scenario_counts.get(integration.id, 0),
@@ -311,6 +417,7 @@ def _phase(
     source_fields: dict[UUID, str],
     target_fields: dict[UUID, str],
     target_refs: set[UUID],
+    required_target_fields: set[UUID] | None = None,
 ) -> IntegrationFlowPhase:
     try:
         document = GraphDocument.model_validate(graph or {})
@@ -322,11 +429,22 @@ def _phase(
             node_id=node.id,
             type=node.type,
             label=_transformation_label(node),
+            role=_flow_role(node.type),
+            position={
+                "x": float(node.position.get("x", 0.0)),
+                "y": float(node.position.get("y", 0.0)),
+            },
         )
         for node in nodes
         if node.type not in ("source", "target")
     ]
     mapped = target_refs & set(target_fields)
+    required = required_target_fields or set()
+    unmapped_required = [
+        target_fields[field_id]
+        for field_id in sorted(target_fields, key=lambda item: target_fields[item])
+        if field_id in required and field_id not in mapped
+    ]
     return IntegrationFlowPhase(
         phase=phase,
         configured=bool(nodes),
@@ -337,6 +455,7 @@ def _phase(
         target_field_count=len(target_fields),
         mapped_target_count=len(mapped),
         target_fields=[target_fields[field_id] for field_id in sorted(mapped, key=str)],
+        unmapped_required_fields=unmapped_required,
     )
 
 
@@ -348,6 +467,8 @@ def _contract_phases(
 ) -> list[IntegrationFlowPhase]:
     source_fields = _active_field_names(db, workspace, integration.source_object_id)
     target_fields = _active_field_names(db, workspace, integration.target_object_id)
+    source_required = set(_required_field_names(db, workspace, integration.source_object_id))
+    target_required = set(_required_field_names(db, workspace, integration.target_object_id))
     phases: list[IntegrationFlowPhase] = [
         _phase(
             "request",
@@ -355,6 +476,7 @@ def _contract_phases(
             source_fields=source_fields,
             target_fields=target_fields,
             target_refs=refs.get("target", set()),
+            required_target_fields=target_required,
         )
     ]
     if integration.interaction_type == "REQUEST_RESPONSE":
@@ -365,6 +487,7 @@ def _contract_phases(
                 source_fields=target_fields,
                 target_fields=source_fields,
                 target_refs=refs.get("response_target", set()),
+                required_target_fields=source_required,
             )
         )
     if integration.interaction_type == "ASYNC_CALLBACK":
@@ -375,6 +498,7 @@ def _contract_phases(
                 source_fields=target_fields,
                 target_fields=source_fields,
                 target_refs=refs.get("response_target", set()),
+                required_target_fields=source_required,
             )
         )
     if integration.error_response_object_id is not None:
@@ -386,6 +510,7 @@ def _contract_phases(
                 source_fields=error_fields,
                 target_fields=source_fields,
                 target_refs=refs.get("error_response_target", set()),
+                required_target_fields=source_required,
             )
         )
     return phases
@@ -682,6 +807,15 @@ def integration_message_flow(
         scenario_counts=scenario_counts,
     )
     spec = integration.specification or {}
+    channel_kind, channel_label = _channel(
+        integration,
+        interfaces.get(integration.producer_interface_id)
+        if integration.producer_interface_id
+        else None,
+        interfaces.get(integration.consumer_interface_id)
+        if integration.consumer_interface_id
+        else None,
+    )
     logger.info(
         "integration message flow generated workspace=%s contract=%s",
         workspace.id,
@@ -691,6 +825,8 @@ def integration_message_flow(
         contract=contract,
         routing=str(spec.get("routing") or ""),
         trigger_config=integration.trigger_config or {},
+        channel_kind=channel_kind,
+        channel_label=channel_label,
         phases=_contract_phases(db, workspace, integration, refs),
     )
 
@@ -763,4 +899,126 @@ def integration_conformance(
         error_coverage=error_coverage,
         scenarios=statuses,
         summary=summary,
+    )
+
+
+@router.get(
+    "/contracts/{integration_id}/sequence",
+    response_model=IntegrationSequenceResponse,
+)
+def integration_sequence(
+    workspace_id: UUID,
+    integration_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> IntegrationSequenceResponse:
+    """Project referencing scenarios as participants and ordered interactions.
+
+    This reuses the stored ``ScenarioDocument`` engine: it never re-evaluates or
+    re-writes a scenario, it only reads the participants and step order that the
+    sequence designer already owns.
+    """
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_integration(workspace)
+    _get_state(db, workspace, state_id)
+    integration = _get_integration(db, workspace, integration_id)
+
+    systems = {
+        system.id: system
+        for system in db.scalars(
+            select(CatalogSystem).where(
+                CatalogSystem.tenant_id == workspace.tenant_id,
+                CatalogSystem.deleted_at.is_(None),
+            )
+        )
+    }
+    contracts_by_id = {item.id: item for item in _active_integrations(db, workspace)}
+    scenarios = _referencing_scenarios(db, workspace, integration)
+
+    sequences: list[IntegrationScenarioSequence] = []
+    for scenario in scenarios:
+        status_value, step_count, _ = _scenario_status(db, workspace, integration, scenario)
+        base = {
+            "id": scenario.id,
+            "name": scenario.name,
+            "category": scenario.category,
+            "status": status_value,
+            "revision": scenario.revision,
+            "outdated": _is_outdated(scenario, integration),
+            "step_count": step_count,
+        }
+        try:
+            document = ScenarioDocument.model_validate(scenario.document)
+        except ValidationError:
+            sequences.append(IntegrationScenarioSequence(**base))
+            continue
+
+        system_by_participant: dict[str, UUID | None] = {}
+        participants: list[IntegrationSequenceParticipant] = []
+        for participant in document.participants:
+            system = systems.get(participant.system_id) if participant.system_id else None
+            system_by_participant[participant.id] = participant.system_id
+            participants.append(
+                IntegrationSequenceParticipant(
+                    id=participant.id,
+                    kind=participant.kind,
+                    label=participant.label or (system.name if system else participant.id),
+                    system_id=participant.system_id,
+                    system_name=system.name if system else None,
+                    is_runtime=_is_runtime_system(system),
+                )
+            )
+
+        interactions: list[IntegrationSequenceInteraction] = []
+        for step in document.steps():
+            if step.kind == "contract":
+                referenced = contracts_by_id.get(step.contract_id) if step.contract_id else None
+                contract_label = referenced.name if referenced else "Contract"
+                interactions.append(
+                    IntegrationSequenceInteraction(
+                        id=step.id,
+                        kind=step.kind,
+                        phase=step.phase,
+                        from_id=_participant_for_system(
+                            system_by_participant,
+                            referenced.source_system_id if referenced else None,
+                        ),
+                        to_id=_participant_for_system(
+                            system_by_participant,
+                            referenced.target_system_id if referenced else None,
+                        ),
+                        label=f"{contract_label} · {step.phase or 'request'}",
+                        contract_step=True,
+                    )
+                )
+            else:
+                interactions.append(
+                    IntegrationSequenceInteraction(
+                        id=step.id,
+                        kind=step.kind,
+                        phase=None,
+                        from_id=step.from_participant_id,
+                        to_id=step.to_participant_id,
+                        label=step.label or step.kind,
+                        contract_step=False,
+                    )
+                )
+        sequences.append(
+            IntegrationScenarioSequence(
+                **base, participants=participants, interactions=interactions
+            )
+        )
+
+    logger.info(
+        "integration sequence generated workspace=%s contract=%s scenarios=%s",
+        workspace.id,
+        integration.id,
+        len(sequences),
+    )
+    return IntegrationSequenceResponse(
+        contract_id=integration.id,
+        contract_name=integration.name,
+        revision=integration.revision,
+        scenarios=sequences,
     )
