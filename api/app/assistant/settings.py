@@ -32,6 +32,10 @@ MAX_AGENT_STEPS = 12
 DEFAULT_MAX_RESPONSE_BYTES = 262_144
 DEFAULT_MAX_STREAM_EVENT_BYTES = 65_536
 DEFAULT_MAX_CONTRACT_BYTES = 1_048_576
+#: A session transcript legitimately accumulates every step of a multi-step turn
+#: (bounded tool inputs/outputs and assistant text), so it is read through its own
+#: larger ceiling rather than the tight per-response cap. Still hard-bounded.
+DEFAULT_MAX_TRANSCRIPT_BYTES = 2_097_152
 HARD_MAX_RESPONSE_BYTES = 4_194_304
 
 
@@ -63,6 +67,9 @@ class AssistantSettings(BaseSettings):
     """Static service token the OpenCode plugin presents to the internal tool
     dispatch endpoint. Empty means internal dispatch is refused (fail closed)."""
 
+    tool_service_token_previous: SecretStr = SecretStr("")
+    """Optional previous token accepted during rotation. Never logged."""
+
     connect_timeout_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
     stream_timeout_seconds: float = 30.0
@@ -75,6 +82,11 @@ class AssistantSettings(BaseSettings):
     """Dedicated, larger cap for the OpenAPI contract document fetched by the
     startup probe. Lifecycle responses stay tightly bounded by
     ``max_response_bytes``; the pinned contract document is ~270 KiB."""
+
+    max_transcript_bytes: int = Field(default=DEFAULT_MAX_TRANSCRIPT_BYTES, gt=0)
+    """Dedicated, larger cap for the OpenCode session transcript
+    (``GET /api/session/{id}/message``), which accumulates across a multi-step
+    turn. Every other lifecycle response stays bounded by ``max_response_bytes``."""
 
     provider_fallback_enabled: bool = False
     """Automatic provider fallback is never permitted for the assistant."""
@@ -105,7 +117,7 @@ class AssistantSettings(BaseSettings):
             raise ValueError("assistant timeouts must be positive")
         return value
 
-    @field_validator("max_response_bytes", "max_contract_bytes")
+    @field_validator("max_response_bytes", "max_contract_bytes", "max_transcript_bytes")
     @classmethod
     def _validate_max_response_bytes(cls, value: int) -> int:
         if value > HARD_MAX_RESPONSE_BYTES:
@@ -125,6 +137,14 @@ class AssistantSettings(BaseSettings):
 
     def has_service_token(self) -> bool:
         return bool(self.service_token())
+
+    def service_tokens(self) -> tuple[str, ...]:
+        """Current token plus an optional previous token for rotation."""
+        tokens = [self.service_token()]
+        previous = self.tool_service_token_previous.get_secret_value()
+        if previous:
+            tokens.append(previous)
+        return tuple(token for token in tokens if token)
 
     def resolve_path(self, configured: str) -> Path:
         path = Path(configured)

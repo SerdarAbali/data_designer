@@ -23,12 +23,16 @@ from app.models.architecture_object import (
 )
 from app.models.assistant import (
     CONVERSATION_STATUSES,
+    CREDENTIAL_STATUSES,
     MESSAGE_ROLES,
     MESSAGE_STATUSES,
+    PRIVACY_CLASSIFICATIONS,
+    SENSITIVE_CLASSIFICATIONS,
     TOOL_CALL_STATUSES,
     AssistantConversation,
     AssistantEvent,
     AssistantMessage,
+    AssistantModelSettings,
     AssistantToolCall,
 )
 from app.models.auth import AuthSession, Tenant, User
@@ -54,6 +58,7 @@ __all__ = [
     "AssistantConversation",
     "AssistantEvent",
     "AssistantMessage",
+    "AssistantModelSettings",
     "AssistantToolCall",
     "AuthSession",
     "BusinessCapability",
@@ -65,6 +70,7 @@ __all__ = [
     "CatalogSystem",
     "CHANGE_SET_STATUSES",
     "CONVERSATION_STATUSES",
+    "CREDENTIAL_STATUSES",
     "DataRepository",
     "DeploymentNode",
     "HelperAuditEvent",
@@ -81,7 +87,9 @@ __all__ = [
     "MESSAGE_ROLES",
     "MESSAGE_STATUSES",
     "OrganizationRole",
+    "PRIVACY_CLASSIFICATIONS",
     "Scenario",
+    "SENSITIVE_CLASSIFICATIONS",
     "SolutionBoundary",
     "SolutionComponent",
     "SolutionMember",

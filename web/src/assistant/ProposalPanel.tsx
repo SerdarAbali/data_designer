@@ -2,15 +2,43 @@
  * Architecture Assistant proposal panel.
  *
  * Renders one authoritative helper change set (fetched from the helper API) with
- * bounded, collapsible sections and closed resolution controls. It never renders
- * unbounded JSON and offers no Approve, Apply, or Undo action.
+ * bounded, collapsible sections, closed resolution controls, and the explicit
+ * user-controlled Validate / Approve / Apply / Undo lifecycle. Approve, Apply,
+ * and Undo are invoked only by the authenticated browser through the existing
+ * helper-action API; the model has no tool that performs them. It never renders
+ * unbounded JSON and never shows optimistic success before the backend confirms.
  */
 
 import React from "react";
 
-import { fetchChangeSet, resolveChangeSet, validateChangeSet } from "./assistantApi";
+import {
+  applyChangeSet,
+  approveChangeSet,
+  fetchChangeSet,
+  recordProposalEvent,
+  resolveChangeSet,
+  undoChangeSet,
+  validateChangeSet,
+} from "./assistantApi";
 import { buildPreview } from "./assistantPreview";
-import type { ChangeSetDetail, ProposalDecision, ProposalOperation } from "./assistantTypes";
+import {
+  LIFECYCLE_LABELS,
+  canApply,
+  canApprove,
+  canUndo,
+  canValidate,
+  hasRequiredUnresolved,
+  humanizeId,
+  operationCounts,
+  proposalLifecycle,
+} from "./assistantModel";
+import type {
+  ApplyResult,
+  ChangeSetDetail,
+  ProposalDecision,
+  ProposalOperation,
+  UndoResult,
+} from "./assistantTypes";
 
 const SCALAR_FIELDS: Record<string, string[]> = {
   create_contract: ["name", "purpose", "implementation_status"],
@@ -22,22 +50,34 @@ const SCALAR_FIELDS: Record<string, string[]> = {
   define_conformance_expectation: ["coverage_min", "expected_success"],
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  draft: "Draft",
-  validation_failed: "Validation failed",
-  validated: "Validated",
-  stale: "Stale",
-  approved: "Approved (external, read-only)",
-  applied: "Applied (read-only history)",
-  undone: "Undone (read-only history)",
-  failed: "Failed",
-};
+const APPLY_COUNT_GROUPS: { key: string; label: string }[] = [
+  { key: "create_object", label: "Objects to create" },
+  { key: "include_object", label: "Objects to reuse" },
+  { key: "override_object", label: "Objects to change" },
+  { key: "create_link", label: "Relationships" },
+  { key: "record_interaction", label: "Memberships" },
+  { key: "set_realization", label: "Realizations" },
+  { key: "reuse_contract", label: "Contracts reused" },
+  { key: "create_contract", label: "Contracts to create" },
+  { key: "create_mapping", label: "Mappings" },
+  { key: "create_transformation", label: "Transformations" },
+  { key: "configure_resilience", label: "Resilience" },
+  { key: "create_scenario", label: "Scenarios" },
+  { key: "define_conformance_expectation", label: "Conformance expectations" },
+];
 
 export interface ProposalPanelProps {
   workspaceId: string | null;
+  workspaceName?: string;
+  conversationId?: string | null;
   changeSetId: string | null;
+  onApplied?: (result: ApplyResult) => void;
+  onUndone?: () => void;
+  onClearHighlights?: () => void;
   onClose?: () => void;
 }
+
+type PendingAction = "approve" | "apply" | "undo" | null;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -76,12 +116,7 @@ function DecisionControl({
         });
         break;
       case "set_scalar":
-        onResolve({
-          operation_id: decision.operation_id,
-          kind: decision.kind,
-          field,
-          value,
-        });
+        onResolve({ operation_id: decision.operation_id, kind: decision.kind, field, value });
         break;
       case "choose_contract_intent":
         onResolve({ operation_id: decision.operation_id, kind: decision.kind, proposal_intent: intent });
@@ -142,9 +177,7 @@ function DecisionControl({
         </button>
         <button
           type="button"
-          onClick={() =>
-            onResolve({ operation_id: decision.operation_id, kind: "remove_operation" })
-          }
+          onClick={() => onResolve({ operation_id: decision.operation_id, kind: "remove_operation" })}
         >
           Remove operation
         </button>
@@ -155,17 +188,57 @@ function DecisionControl({
 
 function operationLabel(operation: ProposalOperation): string {
   const proposed = (operation.proposed_value ?? {}) as Record<string, unknown>;
-  return String(proposed.name ?? operation.temporary_id ?? operation.target_id ?? operation.operation_id);
+  const name = proposed.name;
+  if (name) return String(name);
+  return (
+    humanizeId(operation.temporary_id) ||
+    humanizeId(operation.target_id) ||
+    operation.operation_id
+  );
 }
 
-export function ProposalPanel({ workspaceId, changeSetId, onClose }: ProposalPanelProps) {
+function errorCode(caught: unknown): string {
+  const detail = (caught as { detail?: unknown })?.detail;
+  if (detail && typeof detail === "object" && "code" in detail) {
+    const code = (detail as { code?: unknown }).code;
+    if (typeof code === "string") return code.replace(/[^a-z0-9_]/gi, "").slice(0, 40);
+  }
+  return "action_failed";
+}
+
+function errorMessage(caught: unknown): string {
+  return caught instanceof Error ? caught.message : "The action failed.";
+}
+
+export function ProposalPanel({
+  workspaceId,
+  workspaceName,
+  conversationId,
+  changeSetId,
+  onApplied,
+  onUndone,
+  onClearHighlights,
+  onClose,
+}: ProposalPanelProps) {
   const [detail, setDetail] = React.useState<ChangeSetDetail | null>(null);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [applying, setApplying] = React.useState(false);
+  const [applyFailed, setApplyFailed] = React.useState(false);
+  const [applyResult, setApplyResult] = React.useState<ApplyResult | null>(null);
+  const [undoResult, setUndoResult] = React.useState<UndoResult | null>(null);
+  const [undoConflict, setUndoConflict] = React.useState(false);
+  const [pending, setPending] = React.useState<PendingAction>(null);
 
   React.useEffect(() => {
     setDetail(null);
     setError("");
+    setApplyResult(null);
+    setUndoResult(null);
+    setApplyFailed(false);
+    setUndoConflict(false);
+    setPending(null);
+    onClearHighlights?.();
     if (!workspaceId || !changeSetId) return;
     let cancelled = false;
     void fetchChangeSet(workspaceId, changeSetId)
@@ -173,15 +246,127 @@ export function ProposalPanel({ workspaceId, changeSetId, onClose }: ProposalPan
         if (!cancelled) setDetail(value);
       })
       .catch((caught) => {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : "Could not load proposal");
+        if (!cancelled) setError(errorMessage(caught));
       });
     return () => {
       cancelled = true;
     };
   }, [workspaceId, changeSetId]);
 
+  async function emitEvent(action: string, reasonCode?: string) {
+    if (!workspaceId || !conversationId || !changeSetId) return;
+    try {
+      await recordProposalEvent(workspaceId, conversationId, changeSetId, action, reasonCode);
+    } catch {
+      /* conversation events are best-effort; helper records stay authoritative */
+    }
+  }
+
+  async function runValidate() {
+    if (!workspaceId || !changeSetId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      setDetail(await validateChangeSet(workspaceId, changeSetId));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runApprove() {
+    if (!workspaceId || !changeSetId || busy) return;
+    setBusy(true);
+    setError("");
+    setPending(null);
+    await emitEvent("approval_started");
+    try {
+      setDetail(await approveChangeSet(workspaceId, changeSetId));
+      await emitEvent("approved");
+    } catch (caught) {
+      const code = errorCode(caught);
+      setError(errorMessage(caught));
+      await emitEvent("approval_failed", code);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runApply() {
+    if (!workspaceId || !changeSetId || busy) return;
+    setBusy(true);
+    setApplying(true);
+    setError("");
+    setApplyFailed(false);
+    setPending(null);
+    await emitEvent("apply_started");
+    try {
+      const result = await applyChangeSet(workspaceId, changeSetId);
+      setApplyResult(result);
+      setDetail(result.change_set);
+      setApplying(false);
+      await emitEvent("applied");
+      onApplied?.(result);
+    } catch (caught) {
+      const code = errorCode(caught);
+      setApplying(false);
+      setApplyFailed(true);
+      setError(errorMessage(caught));
+      await emitEvent("apply_failed", code);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runUndo() {
+    if (!workspaceId || !changeSetId || busy) return;
+    setBusy(true);
+    setError("");
+    setUndoConflict(false);
+    setPending(null);
+    await emitEvent("undo_started");
+    try {
+      const result = await undoChangeSet(workspaceId, changeSetId);
+      setUndoResult(result);
+      setDetail(result.change_set);
+      await emitEvent("undone");
+      onUndone?.();
+    } catch (caught) {
+      const detailValue = (caught as { detail?: { conflicts?: UndoResult["conflicts"] } })?.detail;
+      setUndoConflict(true);
+      setError(errorMessage(caught));
+      if (detailValue?.conflicts) {
+        setUndoResult({
+          change_set: detail ?? ({} as ChangeSetDetail),
+          status: "conflict",
+          undone_operation_count: 0,
+          undone_operations: [],
+          preserved_objects: [],
+          warnings: [],
+          conflicts: detailValue.conflicts,
+        });
+      }
+      await emitEvent("undo_conflict", errorCode(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyResolution(resolution: Record<string, unknown>) {
+    if (!workspaceId || !changeSetId || busy) return;
+    setBusy(true);
+    try {
+      setDetail(await resolveChangeSet(workspaceId, changeSetId, [resolution]));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!changeSetId) return null;
-  if (error) {
+  if (error && !detail) {
     return (
       <section className="proposal-panel" data-testid="proposal-panel">
         <p className="assistant-error" role="alert">
@@ -200,40 +385,17 @@ export function ProposalPanel({ workspaceId, changeSetId, onClose }: ProposalPan
 
   const preview = buildPreview(detail.operations);
   const validation = detail.validation_summary ?? {};
-  const ready = Boolean(validation.ready_for_approval);
-  const unresolved = detail.unresolved_details ?? [];
+  const counts = operationCounts(detail.operations);
+  const lifecycle = proposalLifecycle(detail, { applying, applyFailed, undoConflict });
   const ordered = [...detail.operations].sort((a, b) => a.ordinal - b.ordinal);
-
-  async function applyResolution(resolution: Record<string, unknown>) {
-    if (!workspaceId || !changeSetId) return;
-    setBusy(true);
-    try {
-      setDetail(await resolveChangeSet(workspaceId, changeSetId, [resolution]));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Resolution failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function requestValidation() {
-    if (!workspaceId || !changeSetId) return;
-    setBusy(true);
-    try {
-      setDetail(await validateChangeSet(workspaceId, changeSetId));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Validation failed");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const unresolvedRequired = hasRequiredUnresolved(detail);
 
   return (
     <section className="proposal-panel" data-testid="proposal-panel" data-status={detail.status}>
       <header className="proposal-header">
         <h3>Proposal</h3>
-        <span className="proposal-status" data-status={detail.status}>
-          {STATUS_LABELS[detail.status] ?? detail.status}
+        <span className="proposal-status" data-lifecycle={lifecycle}>
+          {LIFECYCLE_LABELS[lifecycle]}
         </span>
         {onClose ? (
           <button type="button" onClick={onClose} aria-label="Close proposal">
@@ -249,19 +411,195 @@ export function ProposalPanel({ workspaceId, changeSetId, onClose }: ProposalPan
       </p>
 
       <div className="proposal-actions">
-        <button type="button" onClick={() => void requestValidation()} disabled={busy}>
+        <button
+          type="button"
+          onClick={() => void runValidate()}
+          disabled={busy || !canValidate(detail)}
+        >
           Validate
         </button>
-        <span className="proposal-ready" data-ready={ready}>
-          {ready ? "Ready for review" : "Decisions required"}
+        <button
+          type="button"
+          data-testid="approve-button"
+          onClick={() => setPending("approve")}
+          disabled={busy || !canApprove(detail)}
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          data-testid="apply-button"
+          onClick={() => setPending("apply")}
+          disabled={busy || !canApply(detail)}
+        >
+          Apply
+        </button>
+        <button
+          type="button"
+          data-testid="undo-button"
+          onClick={() => setPending("undo")}
+          disabled={busy || !canUndo(detail)}
+        >
+          Undo
+        </button>
+        <span className="proposal-ready" data-ready={!unresolvedRequired}>
+          {unresolvedRequired ? "Decisions required" : "Ready for review"}
         </span>
       </div>
+
+      {error ? (
+        <p className="assistant-error" role="alert" data-testid="proposal-error">
+          {error}
+        </p>
+      ) : null}
+
+      {pending ? (
+        <div className="proposal-dialog" role="dialog" aria-modal="true" data-testid="confirm-dialog">
+          <h4>
+            {pending === "approve" ? "Approve proposal?" : pending === "apply" ? "Apply proposal?" : "Undo proposal?"}
+          </h4>
+          {pending === "approve" ? (
+            <>
+              <p>
+                Approving records your approval only. It does <strong>not</strong> apply any changes to
+                the architecture.
+              </p>
+              <ul className="proposal-confirm-list">
+                <li>Operations: {Object.values(counts).reduce((sum, value) => sum + value, 0)}</li>
+                <li>Reused objects: {detail.reused_objects.length}</li>
+                <li>New objects: {detail.proposed_objects.length}</li>
+                <li>Contracts: {counts.create_contract ?? 0} new · {counts.reuse_contract ?? 0} reused</li>
+                <li>Scenarios: {counts.create_scenario ?? 0}</li>
+                <li>Target state: {detail.state_type ?? "unknown"}</li>
+                <li>Affected disciplines: {preview.affectedDisciplines.join(", ") || "—"}</li>
+                <li>Hash: {(detail.proposal_hash ?? "").slice(0, 12)}</li>
+              </ul>
+              {unresolvedRequired ? <p className="proposal-warning">Required decisions remain.</p> : null}
+            </>
+          ) : null}
+          {pending === "apply" ? (
+            <>
+              <p>Apply writes the approved operations into the target state.</p>
+              <ul className="proposal-confirm-list">
+                <li>Workspace: {workspaceName ?? "this workspace"}</li>
+                <li>Target state: {detail.state_type ?? "unknown"}</li>
+                {APPLY_COUNT_GROUPS.filter((group) => counts[group.key]).map((group) => (
+                  <li key={group.key}>
+                    {group.label}: {counts[group.key]}
+                  </li>
+                ))}
+                <li>Affected workbenches: {preview.affectedDisciplines.join(", ") || "—"}</li>
+              </ul>
+              {detail.warnings.length > 0 ? (
+                <p className="proposal-warning">{detail.warnings.length} warning(s) remain.</p>
+              ) : null}
+            </>
+          ) : null}
+          {pending === "undo" ? (
+            <>
+              <p>
+                Undo is all-or-nothing. It removes only the data this change set created; reused
+                Catalog records and canonical objects are preserved. Later edits or external
+                references can block undo, in which case nothing is undone.
+              </p>
+            </>
+          ) : null}
+          <div className="proposal-dialog-actions">
+            <button
+              type="button"
+              data-testid="confirm-action"
+              onClick={() =>
+                void (pending === "approve" ? runApprove() : pending === "apply" ? runApply() : runUndo())
+              }
+              disabled={busy}
+            >
+              Confirm {pending}
+            </button>
+            <button type="button" onClick={() => setPending(null)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {applyResult ? (
+        <Section title="Apply results">
+          <ul className="proposal-results" data-testid="apply-results">
+            <li>Applied operations: {applyResult.applied_operation_count}</li>
+            <li>Affected workbenches: {applyResult.affected_workbenches.join(", ") || "—"}</li>
+            <li>Audit reference: {applyResult.audit_event_ref ?? "—"}</li>
+          </ul>
+          {onClearHighlights ? (
+            <button type="button" onClick={onClearHighlights} data-testid="clear-highlights">
+              Clear highlights
+            </button>
+          ) : null}
+          <p className="proposal-meta">Created / reused objects</p>
+          <ul>
+            {applyResult.applied_operations.map((operation) => (
+              <li key={operation.operation_id}>
+                <code>{operation.domain_action}</code> · {operation.role ?? "applied"} ·{" "}
+                {operation.applied_id}
+              </li>
+            ))}
+          </ul>
+          {applyResult.contract_revisions.length > 0 ? (
+            <>
+              <p className="proposal-meta">Contracts</p>
+              <ul>
+                {applyResult.contract_revisions.map((revision) => (
+                  <li key={revision.contract_id}>
+                    {revision.contract_id} · revision {revision.revision} · {revision.role}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {Object.keys(applyResult.resolution_map).length > 0 ? (
+            <>
+              <p className="proposal-meta">Temporary-ID resolution</p>
+              <ul>
+                {Object.entries(applyResult.resolution_map).map(([temp, real]) => (
+                  <li key={temp}>
+                    <code>{temp}</code> → {real}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </Section>
+      ) : null}
+
+      {undoConflict && undoResult?.conflicts?.length ? (
+        <Section title="Undo conflict">
+          <p className="proposal-warning" data-testid="undo-conflict">
+            No changes were undone. Undo was refused because of the following conflicts.
+          </p>
+          <ul>
+            {undoResult.conflicts.map((conflict, index) => (
+              <li key={index}>
+                {conflict.code ?? "conflict"}
+                {conflict.operation_id ? ` · ${conflict.operation_id}` : ""}: {conflict.message}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
+      {undoResult && !undoConflict ? (
+        <Section title="Undo result">
+          <p data-testid="undo-result">
+            Undone operations: {undoResult.undone_operation_count}. Preserved objects:{" "}
+            {undoResult.preserved_objects.length}.
+          </p>
+        </Section>
+      ) : null}
 
       <Section title={`Reused objects (${detail.reused_objects.length})`}>
         <ul>
           {detail.reused_objects.map((item) => (
             <li key={`${item.target_type}:${item.target_id}`} data-badge="reused">
-              {item.target_type} · {item.target_id}
+              {item.name || humanizeId(item.target_id) || item.target_type}
             </li>
           ))}
         </ul>
@@ -271,18 +609,18 @@ export function ProposalPanel({ workspaceId, changeSetId, onClose }: ProposalPan
         <ul>
           {detail.proposed_objects.map((item) => (
             <li key={String(item.temporary_id)} data-badge="added">
-              {item.target_type} · {item.temporary_id}
+              {item.name || item.temporary_id || item.target_type}
             </li>
           ))}
         </ul>
       </Section>
 
-      <Section title={`Unresolved decisions (${unresolved.length})`} >
-        {unresolved.length === 0 ? (
+      <Section title={`Unresolved decisions (${(detail.unresolved_details ?? []).length})`}>
+        {(detail.unresolved_details ?? []).length === 0 ? (
           <p>No open decisions.</p>
         ) : (
           <ul className="proposal-decisions" data-testid="proposal-decisions">
-            {unresolved.map((decision) => (
+            {(detail.unresolved_details ?? []).map((decision) => (
               <DecisionControl
                 key={decision.decision_id}
                 decision={decision}
@@ -311,9 +649,7 @@ export function ProposalPanel({ workspaceId, changeSetId, onClose }: ProposalPan
 
       <Section title="Validation">
         <p data-testid="validation-summary">
-          {detail.validated_at
-            ? `Validated ${detail.validated_at}`
-            : "Not validated"}
+          {detail.validated_at ? `Validated ${detail.validated_at}` : "Not validated"}
           {typeof validation.valid === "number" ? ` · ${validation.valid} valid` : ""}
           {typeof validation.invalid === "number" ? ` · ${validation.invalid} invalid` : ""}
           {typeof validation.unresolved === "number" ? ` · ${validation.unresolved} unresolved` : ""}

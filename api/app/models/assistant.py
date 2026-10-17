@@ -16,6 +16,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -34,6 +35,11 @@ CONVERSATION_STATUSES = ("active", "cancelling", "archived", "deleted")
 MESSAGE_ROLES = ("user", "assistant", "notice")
 MESSAGE_STATUSES = ("pending", "streaming", "complete", "failed", "cancelled")
 TOOL_CALL_STATUSES = ("pending", "running", "completed", "denied", "error")
+
+#: Privacy classifications. ``confidential`` and ``restricted`` are sensitive.
+PRIVACY_CLASSIFICATIONS = ("public", "internal", "confidential", "restricted")
+SENSITIVE_CLASSIFICATIONS = ("confidential", "restricted")
+CREDENTIAL_STATUSES = ("configured", "missing", "invalid")
 
 
 class AssistantConversation(Base):
@@ -167,4 +173,53 @@ class AssistantEvent(Base):
     payload: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class AssistantModelSettings(Base):
+    """Tenant-scoped provider/model configuration (owner-only).
+
+    This table never stores provider credentials: it records only non-secret
+    configuration plus the credential *status* observed server-side. Secrets live
+    exclusively in server-side environment/secret material.
+    """
+
+    __tablename__ = "assistant_model_settings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_assistant_model_settings_tenant"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    model_variant: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    reasoning_effort: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    max_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=16000)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4000)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=180)
+    step_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    privacy_classification: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="internal"
+    )
+    trains_on_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    approved_for_sensitive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fallback_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    fallback_model_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    fallback_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    credential_status: Mapped[str] = mapped_column(String(20), nullable=False, default="missing")
+    credential_last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )

@@ -54,6 +54,7 @@ class FakeRuntime:
         self._text = text
         self._tools = tools or []
         self.version = "2.0.30"
+        self._prompted = False
 
     def create_session(self, body: dict[str, Any]) -> dict[str, Any]:
         self.created += 1
@@ -67,9 +68,13 @@ class FakeRuntime:
 
     def prompt(self, session_id: str, body: dict[str, Any]) -> dict[str, Any]:
         self.prompts.append((session_id, body))
+        self._prompted = True
         return {}
 
     def messages(self, session_id: str) -> list[dict[str, Any]]:
+        if not self._prompted:
+            # Before the prompt the runtime has no turn for this conversation.
+            return []
         content: list[dict[str, Any]] = [{"type": "text", "text": self._text}]
         for tool in self._tools:
             content.append(
@@ -87,10 +92,18 @@ class FakeRuntime:
             )
         return [
             {
+                "type": "user",
+                "id": "msg_fake_user",
+                "time": {"created": 1},
+                "text": self.prompts[-1][1].get("text", "") if self.prompts else "",
+            },
+            {
                 "type": "assistant",
+                "id": "msg_fake_assistant",
+                "time": {"created": 2},
                 "content": content,
                 "info": {"finish": "stop"},
-            }
+            },
         ]
 
     def interrupt(self, session_id: str) -> dict[str, Any]:
@@ -306,3 +319,6 @@ def assistant_env(monkeypatch):
 
     main.app.dependency_overrides.clear()
     engine.dispose()
+    from app.assistant import limits
+
+    limits.limiter.reset()

@@ -12,11 +12,13 @@ import React from "react";
 import {
   CURRENT_READ_ONLY_NOTICE,
   READ_ONLY_NOTICE,
+  humanizeIds,
   runtimeReady,
   statusMessage,
 } from "./assistantModel";
-import type { ScopeSnapshot } from "./assistantTypes";
+import type { ApplyResult, ScopeSnapshot } from "./assistantTypes";
 import { ProposalPanel } from "./ProposalPanel";
+import { AssistantSettingsPanel } from "./AssistantSettingsPanel";
 import { useAssistant } from "./useAssistant";
 
 export interface AssistantPanelProps {
@@ -30,6 +32,9 @@ export interface AssistantPanelProps {
   selectionIds: string[];
   open: boolean;
   onClose: () => void;
+  onProposalApplied?: (result: ApplyResult) => void;
+  onProposalUndone?: () => void;
+  onProposalHighlightsCleared?: () => void;
 }
 
 export function AssistantLauncher({ onOpen, open }: { onOpen: () => void; open: boolean }) {
@@ -57,11 +62,16 @@ export function AssistantPanel({
   selectionIds,
   open,
   onClose,
+  onProposalApplied,
+  onProposalUndone,
+  onProposalHighlightsCleared,
 }: AssistantPanelProps) {
   const fallbackStateId =
     states.find((state) => state.state_type !== "current")?.id ?? states[0]?.id ?? null;
   const [stateOverride, setStateOverride] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState("");
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [toolsOpen, setToolsOpen] = React.useState(false);
 
   React.useEffect(() => {
     setStateOverride(null);
@@ -118,6 +128,11 @@ export function AssistantPanel({
           >
             Delete
           </button>
+          {state.status?.is_owner ? (
+            <button type="button" data-testid="open-settings" onClick={() => setSettingsOpen(true)}>
+              Settings
+            </button>
+          ) : null}
           <button type="button" aria-label="Close assistant" onClick={onClose}>
             Close
           </button>
@@ -186,15 +201,25 @@ export function AssistantPanel({
 
       {state.tools.length > 0 ? (
         <div className="assistant-tools" data-testid="assistant-tools">
-          <h3>Tool activity</h3>
-          <ul>
-            {state.tools.map((tool) => (
-              <li key={tool.id} data-status={tool.status}>
-                <code>{tool.name}</code>
-                <span>{tool.status}</span>
-              </li>
-            ))}
-          </ul>
+          <button
+            type="button"
+            className="assistant-tools-toggle"
+            aria-expanded={toolsOpen}
+            onClick={() => setToolsOpen((open) => !open)}
+          >
+            {toolsOpen ? "▾" : "▸"}
+            Tool activity <span className="assistant-tools-count">{state.tools.length}</span>
+          </button>
+          {toolsOpen && (
+            <ul>
+              {state.tools.map((tool) => (
+                <li key={tool.id} data-status={tool.status}>
+                  <code>{tool.name}</code>
+                  <span>{tool.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       ) : null}
 
@@ -211,15 +236,24 @@ export function AssistantPanel({
               <strong>{message.role}</strong>
               <span>{message.status}</span>
             </header>
-            <p>{message.content}</p>
+            <p>{humanizeIds(message.content)}</p>
           </article>
         ))}
       </div>
 
       <ProposalPanel
         workspaceId={workspaceId}
+        workspaceName={workspaceName}
+        conversationId={state.activeId}
         changeSetId={state.activeProposalId}
+        onApplied={onProposalApplied}
+        onUndone={onProposalUndone}
+        onClearHighlights={onProposalHighlightsCleared}
       />
+
+      {settingsOpen ? (
+        <AssistantSettingsPanel workspaceId={workspaceId} onClose={() => setSettingsOpen(false)} />
+      ) : null}
 
       <form className="assistant-composer" onSubmit={submit}>
         <textarea

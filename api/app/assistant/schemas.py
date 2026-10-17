@@ -31,6 +31,56 @@ class WorkspaceAssistantSettings(BaseModel):
     assistant_enabled: bool
 
 
+PrivacyClassification = Literal["public", "internal", "confidential", "restricted"]
+ReasoningEffort = Literal["low", "medium", "high"]
+
+
+class AssistantSettingsUpdate(BaseModel):
+    """Owner-only provider/model settings. Never carries a credential."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str | None = Field(default=None, max_length=80)
+    model_id: str | None = Field(default=None, max_length=120)
+    model_variant: str | None = Field(default=None, max_length=40)
+    reasoning_effort: ReasoningEffort | None = None
+    max_input_tokens: int | None = Field(default=None, ge=1000, le=200000)
+    max_output_tokens: int | None = Field(default=None, ge=256, le=32000)
+    timeout_seconds: int | None = Field(default=None, ge=30, le=600)
+    step_limit: int | None = Field(default=None, ge=1, le=24)
+    retention_days: int | None = Field(default=None, ge=1, le=90)
+    privacy_classification: PrivacyClassification | None = None
+    trains_on_data: bool | None = None
+    approved_for_sensitive: bool | None = None
+    fallback_provider: str | None = Field(default=None, max_length=80)
+    fallback_model_id: str | None = Field(default=None, max_length=120)
+    fallback_enabled: bool | None = None
+
+
+class AssistantSettingsResponse(BaseModel):
+    workspace_enabled: bool
+    is_owner: bool
+    provider: str | None = None
+    model_id: str | None = None
+    model_variant: str | None = None
+    reasoning_effort: str | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    timeout_seconds: int | None = None
+    step_limit: int | None = None
+    retention_days: int | None = None
+    privacy_classification: str | None = None
+    trains_on_data: bool | None = None
+    approved_for_sensitive: bool | None = None
+    fallback_provider: str | None = None
+    fallback_model_id: str | None = None
+    fallback_enabled: bool | None = None
+    credential_status: str | None = None
+    credential_last_verified_at: datetime | None = None
+    privacy_allowed: bool | None = None
+    privacy_reason: str | None = None
+
+
 class AssistantStatusResponse(BaseModel):
     assistant_enabled: bool
     runtime_status: str
@@ -40,6 +90,7 @@ class AssistantStatusResponse(BaseModel):
     reason_code: str
     correlation_id: str
     workspace_enabled: bool | None = None
+    is_owner: bool | None = None
 
 
 class ScopeUpdate(BaseModel):
@@ -146,3 +197,31 @@ class InternalToolCallResponse(BaseModel):
 class InternalScopeResponse(BaseModel):
     status: Literal["ok", "denied"]
     tools: list[str] = Field(default_factory=list)
+
+
+ProposalEventAction = Literal[
+    "approval_started",
+    "approved",
+    "approval_failed",
+    "apply_started",
+    "applied",
+    "apply_failed",
+    "undo_started",
+    "undone",
+    "undo_conflict",
+]
+
+
+class ProposalEventRequest(BaseModel):
+    """A bounded application event for a user-driven proposal action.
+
+    The browser reports the action; the backend derives the bounded summary from
+    the authoritative helper change set. Full operations and payloads are never
+    stored here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    change_set_id: UUID
+    action: ProposalEventAction
+    reason_code: str | None = Field(default=None, max_length=40, pattern=r"^[a-z0-9_]+$")

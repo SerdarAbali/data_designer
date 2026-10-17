@@ -2,12 +2,15 @@
 
 import { api } from "../apiClient";
 import type {
+  ApplyResult,
+  AssistantSettings,
   AssistantStatus,
   ChangeSetDetail,
   ChatMessage,
   ConversationDetail,
   ConversationSummary,
   ScopeSnapshot,
+  UndoResult,
 } from "./assistantTypes";
 
 function base(workspaceId: string): string {
@@ -105,6 +108,32 @@ export function openEventStream(
   );
 }
 
+// -- owner-only settings ----------------------------------------------------
+
+export function fetchAssistantSettings(workspaceId: string): Promise<AssistantSettings> {
+  return api<AssistantSettings>(`${base(workspaceId)}/settings`);
+}
+
+export function updateWorkspaceEnabled(
+  workspaceId: string,
+  enabled: boolean,
+): Promise<{ assistant_enabled: boolean }> {
+  return api<{ assistant_enabled: boolean }>(`${base(workspaceId)}/settings`, {
+    method: "PUT",
+    body: JSON.stringify({ assistant_enabled: enabled }),
+  });
+}
+
+export function updateAssistantSettings(
+  workspaceId: string,
+  payload: Partial<AssistantSettings>,
+): Promise<AssistantSettings> {
+  return api<AssistantSettings>(`${base(workspaceId)}/settings/model`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 // -- helper change sets (authoritative proposal records) --------------------
 
 function changeSetBase(workspaceId: string, changeSetId: string): string {
@@ -133,4 +162,42 @@ export function resolveChangeSet(
     method: "POST",
     body: JSON.stringify({ resolutions }),
   });
+}
+
+export function approveChangeSet(
+  workspaceId: string,
+  changeSetId: string,
+): Promise<ChangeSetDetail> {
+  return api<ChangeSetDetail>(`${changeSetBase(workspaceId, changeSetId)}/approve`, {
+    method: "POST",
+  });
+}
+
+export function applyChangeSet(workspaceId: string, changeSetId: string): Promise<ApplyResult> {
+  return api<ApplyResult>(`${changeSetBase(workspaceId, changeSetId)}/apply`, { method: "POST" });
+}
+
+export function undoChangeSet(workspaceId: string, changeSetId: string): Promise<UndoResult> {
+  return api<UndoResult>(`${changeSetBase(workspaceId, changeSetId)}/undo`, { method: "POST" });
+}
+
+/** Record a bounded proposal lifecycle event for the originating conversation. */
+export function recordProposalEvent(
+  workspaceId: string,
+  conversationId: string,
+  changeSetId: string,
+  action: string,
+  reasonCode?: string | null,
+): Promise<{ status: string }> {
+  return api<{ status: string }>(
+    `${base(workspaceId)}/conversations/${conversationId}/proposal-events`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        change_set_id: changeSetId,
+        action,
+        reason_code: reasonCode ?? null,
+      }),
+    },
+  );
 }

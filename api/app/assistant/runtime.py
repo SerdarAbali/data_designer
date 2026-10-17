@@ -139,7 +139,14 @@ class OpenCodeRuntime:
         return self._request(ep.INTERRUPT, params={"sessionID": session_id}, json_body={})
 
     def messages(self, session_id: str) -> Any:
-        return self._request(ep.MESSAGES, params={"sessionID": session_id})
+        # The session transcript accumulates every step of a turn, so it is read
+        # through a dedicated (still bounded) ceiling rather than the tight
+        # per-response cap that governs the other lifecycle calls.
+        return self._request(
+            ep.MESSAGES,
+            params={"sessionID": session_id},
+            max_bytes=self._settings.max_transcript_bytes,
+        )
 
     def permissions(self, session_id: str) -> Any:
         return self._request(ep.PERMISSIONS, params={"sessionID": session_id})

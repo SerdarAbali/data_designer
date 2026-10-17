@@ -273,6 +273,37 @@ def test_internal_scope_and_call_dispatch_read_tool(assistant_env) -> None:
     assert call.json()["status"] == "ok"
 
 
+def test_internal_scope_checks_do_not_exhaust_the_tool_budget(assistant_env) -> None:
+    conversation_id = _create_conversation(assistant_env)
+    with assistant_env.sessions.begin() as db:
+        conversation = db.get(AssistantConversation, UUID(conversation_id))
+        conversation.opencode_session_id = "ses_budget_1"
+    headers = {"X-Assistant-Service-Token": assistant_env.extra["service_token"]}
+
+    for index in range(25):
+        # Interleave the per-request scope hook with the actual tool call, the
+        # shape of a normal multi-step turn. The old shared 20/min budget raised
+        # here; the separated budgets must not.
+        scope = assistant_env.client.get(
+            "/internal/assistant/scope?session=ses_budget_1", headers=headers
+        )
+        assert scope.status_code == 200
+        assert scope.json()["status"] == "ok"
+
+        call = assistant_env.client.post(
+            "/internal/assistant/call",
+            json={
+                "opencode_session_id": "ses_budget_1",
+                "call_id": f"call_budget_{index}",
+                "tool": "architecture_get_workspace_context",
+                "arguments": {},
+            },
+            headers=headers,
+        )
+        assert call.status_code == 200
+        assert call.json()["status"] == "ok"
+
+
 def test_responses_never_leak_credentials_or_internal_url(assistant_env) -> None:
     assistant_env.runtime._tools = []
     conversation_id = _create_conversation(assistant_env)

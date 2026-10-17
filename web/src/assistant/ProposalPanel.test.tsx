@@ -1,112 +1,267 @@
 // @vitest-environment jsdom
 import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProposalPanel } from "./ProposalPanel";
 
-const CHANGE_SET = {
-  id: "cs-1",
-  helper_name: "propose_information_entity",
-  status: "draft",
-  state_id: "state-1",
-  state_type: "candidate",
-  summary: "Add a Customer information entity",
-  proposal_hash: "abcdef1234567890",
-  assumptions: ["Reuses the CRM system"],
-  warnings: ["Billing is not enabled"],
-  unresolved_decisions: [],
-  unresolved_details: [
-    {
-      decision_id: "decision:op-1:choose_canonical_object",
-      operation_id: "op-1",
-      kind: "choose_canonical_object",
-      question: "Which existing canonical object should be reused?",
-      explanation: "The Customer entity is ambiguous.",
-      options: [],
-      required: true,
-      affected_operation_ids: ["op-1"],
-      resolution_state: "open",
-    },
-  ],
-  reused_objects: [{ target_type: "catalog_system", target_id: "sys-1" }],
-  proposed_objects: [{ temporary_id: "tmp:customer", target_type: "information_object" }],
-  validation_summary: { valid: 1, invalid: 0, unresolved: 1, ready_for_approval: false },
-  validated_at: null,
-  approved_at: null,
-  applied_at: null,
-  undone_at: null,
-  operations: [
-    {
-      operation_id: "op-1",
-      ordinal: 0,
-      domain_action: "create_object",
-      target_type: "information_object",
-      target_id: null,
-      temporary_id: "tmp:customer",
-      proposed_value: { kind: "information_object", name: "Customer" },
-      depends_on: [],
-      validation_status: "unresolved",
-      validation_issues: [],
-      resolution_state: "active",
-      explanation: null,
-    },
-  ],
+const HASH = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+
+const DECISION = {
+  decision_id: "decision:op-1:choose_canonical_object",
+  operation_id: "op-1",
+  kind: "choose_canonical_object",
+  question: "Which existing canonical object should be reused?",
+  explanation: "The Customer entity is ambiguous.",
+  options: [],
+  required: true,
+  affected_operation_ids: ["op-1"],
+  resolution_state: "open",
 };
+
+const OPERATION = {
+  operation_id: "op-1",
+  ordinal: 0,
+  domain_action: "create_object",
+  target_type: "information_object",
+  target_id: null,
+  temporary_id: "tmp:customer",
+  proposed_value: { kind: "information_object", name: "Customer" },
+  depends_on: [],
+  validation_status: "unresolved",
+  validation_issues: [],
+  resolution_state: "active",
+  explanation: null,
+};
+
+function changeSet(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "cs-1",
+    helper_name: "propose_information_entity",
+    status: "draft",
+    state_id: "state-1",
+    state_type: "candidate",
+    summary: "Add a Customer information entity",
+    proposal_hash: HASH,
+    assumptions: ["Reuses the CRM system"],
+    warnings: ["Billing is not enabled"],
+    unresolved_decisions: [],
+    unresolved_details: [DECISION],
+    reused_objects: [{ target_type: "catalog_system", target_id: "sys-1" }],
+    proposed_objects: [{ temporary_id: "tmp:customer", target_type: "information_object" }],
+    validation_summary: {},
+    validated_at: null,
+    approved_at: null,
+    approved_hash: null,
+    applied_at: null,
+    undone_at: null,
+    apply_summary: {},
+    undo_summary: {},
+    operations: [OPERATION],
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  document.cookie = "";
 });
 
-function stubFetch(payload: unknown) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => ({ ok: true, status: 200, json: async () => payload })),
+beforeEach(() => {
+  document.cookie = "dd_csrf=test-csrf-token";
+});
+
+function stubRouter(responses: {
+  get?: unknown;
+  approve?: unknown;
+  apply?: unknown;
+  undo?: unknown;
+  undoError?: unknown;
+}) {
+  const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+    const url = String(path);
+    const method = init?.method ?? "GET";
+    if (url.includes("/proposal-events")) {
+      return { ok: true, status: 200, json: async () => ({ status: "recorded" }) };
+    }
+    if (method === "POST" && url.endsWith("/approve")) {
+      return { ok: true, status: 200, json: async () => responses.approve };
+    }
+    if (method === "POST" && url.endsWith("/apply")) {
+      return { ok: true, status: 200, json: async () => responses.apply };
+    }
+    if (method === "POST" && url.endsWith("/undo")) {
+      if (responses.undoError) {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: responses.undoError }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => responses.undo };
+    }
+    return { ok: true, status: 200, json: async () => responses.get };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function renderPanel(overrides: Partial<React.ComponentProps<typeof ProposalPanel>> = {}) {
+  return render(
+    <ProposalPanel
+      workspaceId="ws-1"
+      workspaceName="Demo"
+      conversationId="conv-1"
+      changeSetId="cs-1"
+      {...overrides}
+    />,
   );
 }
 
-describe("ProposalPanel", () => {
-  it("renders the proposal, decisions, and no approve/apply/undo controls", async () => {
-    stubFetch(CHANGE_SET);
-    render(<ProposalPanel workspaceId="ws-1" changeSetId="cs-1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Add a Customer information entity/)).toBeTruthy();
-    });
-    expect(screen.getByText(/Which existing canonical object should be reused/)).toBeTruthy();
-    expect(screen.getByTestId("proposal-operations")).toBeTruthy();
-    expect(screen.getByTestId("preview-counts")).toBeTruthy();
-    expect(screen.getByText(/Decisions required/)).toBeTruthy();
-
-    for (const forbidden of [/^approve$/i, /^apply$/i, /^undo$/i]) {
-      expect(screen.queryByRole("button", { name: forbidden })).toBeNull();
-    }
-    expect(screen.getByRole("button", { name: "Validate" })).toBeTruthy();
+describe("ProposalPanel lifecycle", () => {
+  it("shows Needs decisions and disables Approve until validated", async () => {
+    stubRouter({ get: changeSet() });
+    renderPanel();
+    await waitFor(() => expect(screen.getByText(/Add a Customer information entity/)).toBeTruthy());
+    expect(screen.getByText("Needs decisions")).toBeTruthy();
+    expect(screen.getByTestId("approve-button").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("apply-button").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("undo-button").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Validate" }).hasAttribute("disabled")).toBe(false);
   });
 
-  it("submits a closed resolution and refreshes the proposal", async () => {
-    document.cookie = "dd_csrf=test-csrf-token";
-    const resolved = { ...CHANGE_SET, status: "draft", unresolved_details: [] };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => CHANGE_SET })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => resolved });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<ProposalPanel workspaceId="ws-1" changeSetId="cs-1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Which existing canonical object/)).toBeTruthy();
+  it("enables Approve when validated and ready, then applies via the helper API", async () => {
+    stubRouter({
+      get: changeSet({
+        status: "validated",
+        unresolved_details: [],
+        validation_summary: { ready_for_approval: true, valid: 1 },
+        validated_at: "2026-01-01T00:00:00Z",
+      }),
+      approve: changeSet({
+        status: "approved",
+        unresolved_details: [],
+        validation_summary: { ready_for_approval: true },
+        approved_at: "2026-01-01T00:00:00Z",
+      }),
+      apply: {
+        change_set: changeSet({ status: "applied", applied_at: "2026-01-01T00:00:00Z" }),
+        status: "applied",
+        applied_operation_count: 1,
+        resolution_map: { "tmp:customer": "real-1" },
+        applied_operations: [
+          {
+            operation_id: "op-1",
+            domain_action: "create_object",
+            applied_id: "real-1",
+            role: "created",
+          },
+        ],
+        contract_revisions: [{ contract_id: "c-1", revision: 1, role: "created" }],
+        affected_objects: ["real-1"],
+        affected_workbenches: ["information"],
+        warnings: [],
+        conflicts: [],
+        audit_event_ref: "cs-1",
+      },
     });
+    const onApplied = vi.fn();
+    renderPanel({ onApplied, onClearHighlights: vi.fn() });
+
+    await waitFor(() => expect(screen.getByText("Ready for approval")).toBeTruthy());
+    expect(screen.getByTestId("approve-button").hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(screen.getByTestId("approve-button"));
+    expect(screen.getByTestId("confirm-dialog")).toBeTruthy();
+    expect(screen.getByText(/Approving records your approval only/i)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => expect(screen.getByTestId("apply-button").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByTestId("apply-button"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => expect(onApplied).toHaveBeenCalled());
+    expect(screen.getByTestId("apply-results")).toBeTruthy();
+    expect(screen.getAllByText(/real-1/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/c-1 · revision 1/)).toBeTruthy();
+    expect(screen.getByTestId("clear-highlights")).toBeTruthy();
+  });
+
+  it("enables Undo only when applied and shows conflicts without a force path", async () => {
+    stubRouter({
+      get: changeSet({ status: "applied", applied_at: "2026-01-01T00:00:00Z" }),
+      undoError: {
+        code: "undo_conflict",
+        message: "Undo would overwrite a later change",
+        conflicts: [
+          { operation_id: "op-1", code: "object_modified", message: "information_object changed" },
+        ],
+      },
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("undo-button").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByTestId("undo-button"));
+    expect(screen.getByText(/all-or-nothing/i)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => expect(screen.getByTestId("undo-conflict")).toBeTruthy());
+    expect(screen.getByText(/No changes were undone/i)).toBeTruthy();
+    expect(screen.getByText(/object_modified/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /force/i })).toBeNull();
+    // Buttons return to a usable state after failure.
+    expect(screen.getByTestId("undo-button").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("submits a closed resolution through the UI endpoint", async () => {
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      const url = String(path);
+      if ((init?.method ?? "GET") === "POST" && url.endsWith("/resolve")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => changeSet({ unresolved_details: [] }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => changeSet() };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel();
+    await waitFor(() => expect(screen.getByText(/Which existing canonical object/)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/Resolution value for op-1/), {
       target: { value: "33333333-3333-3333-3333-333333333333" },
     });
     fireEvent.click(screen.getByTestId("resolve-op-1"));
-
     await waitFor(() => {
-      expect(screen.queryByText(/Which existing canonical object/)).toBeNull();
+      expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/resolve"))).toBe(true);
     });
-    const resolveCall = fetchMock.mock.calls[1];
-    expect(String(resolveCall[0])).toContain("/resolve");
+  });
+
+  it("reports a safe failure and keeps no partial success", async () => {
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      const url = String(path);
+      if (url.includes("/proposal-events")) {
+        return { ok: true, status: 200, json: async () => ({ status: "recorded" }) };
+      }
+      if ((init?.method ?? "GET") === "POST" && url.endsWith("/apply")) {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: { code: "before_value_conflict", message: "changed" } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => changeSet({ status: "approved", approved_hash: HASH, validation_summary: { ready_for_approval: true }, unresolved_details: [] }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("apply-button").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByTestId("apply-button"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => expect(screen.getByTestId("proposal-error")).toBeTruthy());
+    expect(screen.queryByTestId("apply-results")).toBeNull();
   });
 });

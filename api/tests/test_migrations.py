@@ -22,13 +22,14 @@ POSTGRES_URL = "postgresql+psycopg://unused:unused@localhost/unused"
 
 # Alembic's default version_num column width.
 VERSION_COLUMN_LENGTH = 32
-EXPECTED_HEAD = "0022_assistant_proposal_review"
+EXPECTED_HEAD = "0023_assistant_model_settings"
 BASE_0016 = "0016_traceability"
 EXPECTED_0017 = "0017_integration_integrity"
 EXPECTED_0018 = "0018_demo_workspaces"
 EXPECTED_0019 = "0019_helper_actions"
 EXPECTED_0020 = "0020_helper_apply_undo"
 EXPECTED_0021 = "0021_assistant_open_code"
+EXPECTED_0022 = "0022_assistant_proposal_review"
 
 
 def _config() -> Config:
@@ -88,6 +89,7 @@ def test_upgrade_from_0016_to_head_includes_new_revisions():
         EXPECTED_0019,
         EXPECTED_0020,
         EXPECTED_0021,
+        EXPECTED_0022,
         EXPECTED_HEAD,
     ]
 
@@ -98,7 +100,7 @@ def test_current_development_revision_is_head_and_compatible():
     assert head is not None
     # The development database is stamped at this head, so it must remain the head.
     assert head.revision == EXPECTED_HEAD
-    assert head.down_revision == EXPECTED_0021
+    assert head.down_revision == EXPECTED_0022
 
 
 def test_offline_upgrade_from_base_to_head_generates_demo_columns():

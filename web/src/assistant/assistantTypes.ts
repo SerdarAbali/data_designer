@@ -53,6 +53,31 @@ export interface AssistantStatus {
   reason_code: string;
   correlation_id: string;
   workspace_enabled?: boolean;
+  is_owner?: boolean;
+}
+
+export interface AssistantSettings {
+  workspace_enabled: boolean;
+  is_owner: boolean;
+  provider?: string | null;
+  model_id?: string | null;
+  model_variant?: string | null;
+  reasoning_effort?: string | null;
+  max_input_tokens?: number | null;
+  max_output_tokens?: number | null;
+  timeout_seconds?: number | null;
+  step_limit?: number | null;
+  retention_days?: number | null;
+  privacy_classification?: string | null;
+  trains_on_data?: boolean | null;
+  approved_for_sensitive?: boolean | null;
+  fallback_provider?: string | null;
+  fallback_model_id?: string | null;
+  fallback_enabled?: boolean | null;
+  credential_status?: string | null;
+  credential_last_verified_at?: string | null;
+  privacy_allowed?: boolean | null;
+  privacy_reason?: string | null;
 }
 
 export interface ScopeSnapshot {
@@ -113,14 +138,51 @@ export interface ChangeSetDetail {
   warnings: unknown[];
   unresolved_decisions: unknown[];
   unresolved_details: ProposalDecision[];
-  reused_objects: { target_type?: string; target_id?: string }[];
-  proposed_objects: { temporary_id?: string; target_type?: string }[];
+  reused_objects: { target_type?: string; target_id?: string; name?: string }[];
+  proposed_objects: { temporary_id?: string; target_type?: string; name?: string }[];
   validation_summary: Record<string, unknown>;
   validated_at: string | null;
   approved_at: string | null;
+  approved_hash: string | null;
   applied_at: string | null;
   undone_at: string | null;
+  apply_summary: Record<string, unknown>;
+  undo_summary: Record<string, unknown>;
   operations: ProposalOperation[];
+}
+
+export interface AppliedOperation {
+  operation_id: string;
+  domain_action: string;
+  applied_id: string;
+  role?: string;
+  apply_status?: string;
+  result?: Record<string, unknown>;
+}
+
+export interface ApplyResult {
+  change_set: ChangeSetDetail;
+  status: string;
+  applied_operation_count: number;
+  resolution_map: Record<string, string>;
+  applied_operations: AppliedOperation[];
+  contract_revisions: { contract_id: string; revision: number; role?: string }[];
+  affected_objects: string[];
+  affected_workbenches: string[];
+  warnings: unknown[];
+  conflicts: { code?: string; message?: string }[];
+  audit_event_ref?: string | null;
+}
+
+export interface UndoResult {
+  change_set: ChangeSetDetail;
+  status: string;
+  undone_operation_count: number;
+  undone_operations: { operation_id: string; domain_action: string; action: string }[];
+  preserved_objects: string[];
+  warnings: unknown[];
+  conflicts: { operation_id?: string; code?: string; message?: string }[];
+  audit_event_ref?: string | null;
 }
 
 export interface AssistantState {

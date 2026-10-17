@@ -27,6 +27,9 @@ services:
       OPENCODE_PASSWORD: ${OPENCODE_PASSWORD:-local-development-only}
       ARCHITECTURE_BACKEND_URL: http://api:8000
       ARCHITECTURE_SERVICE_TOKEN: ${ASSISTANT_TOOL_SERVICE_TOKEN:-local-development-only}
+      # Provider credential is supplied from the gitignored local secret
+      # configuration only; it is never committed or exposed to the browser.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
     volumes:
       # Sensitive OpenCode data directory: transcripts, spilled tool output,
       # runtime state. Bounded volume, never mounted elsewhere, never served.

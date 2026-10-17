@@ -592,6 +592,110 @@ def test_composite_proposal_denied_with_one_discipline(assistant_env) -> None:
     assert outcome["error_code"] == "tool_not_in_scope"
 
 
+def test_approve_apply_undo_absent_from_all_model_surfaces(assistant_env) -> None:
+    from pathlib import Path
+
+    names = set(tools.all_tool_names())
+    for forbidden in ("approve_change_set", "apply_change_set", "undo_change_set"):
+        assert forbidden not in names
+        assert f"architecture_{forbidden}" not in names
+
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest = (repo_root / "assistant-runtime" / "assistant-tools.json").read_text(
+        encoding="utf-8"
+    )
+    plugin = (
+        repo_root
+        / "assistant-runtime"
+        / ".opencode"
+        / "plugins"
+        / "architecture-assistant"
+        / "index.ts"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("approve_change_set", "apply_change_set", "undo_change_set"):
+        assert forbidden not in manifest
+        assert forbidden not in plugin
+
+    conversation_id = _conversation(assistant_env)
+    db, conversation = _load(assistant_env, conversation_id)
+    try:
+        for name in ("approve_change_set", "apply_change_set", "undo_change_set"):
+            outcome = tools.dispatch_tool(db, _user(assistant_env), conversation, name, {})
+            assert outcome["status"] == "denied"
+            assert outcome["error_code"] == "unknown_tool"
+    finally:
+        db.close()
+
+
+def _reference_change_set(env, conversation_id: str, change_set_id: str) -> None:
+    with env.sessions.begin() as db:
+        db.add(
+            AssistantToolCall(
+                conversation_id=UUID(conversation_id),
+                tenant_id=env.tenant_id,
+                workspace_id=env.workspace_id,
+                call_id=f"call_{change_set_id[:8]}",
+                tool_name="architecture_propose_information_entity",
+                arguments_summary={},
+                arguments_hash="hash",
+                status="completed",
+                result_summary={},
+                change_set_id=UUID(change_set_id),
+            )
+        )
+
+
+def test_proposal_events_are_bounded_and_require_csrf(assistant_env) -> None:
+    from app.models import AssistantEvent
+
+    conversation_id = _conversation(assistant_env)
+    change_set_id = _create_proposal(assistant_env, conversation_id)["result"]["change_set_id"]
+    _reference_change_set(assistant_env, conversation_id, change_set_id)
+    url = (
+        f"/api/workspaces/{assistant_env.workspace_id}/assistant/conversations/"
+        f"{conversation_id}/proposal-events"
+    )
+
+    missing_csrf = assistant_env.client.post(
+        url, json={"change_set_id": change_set_id, "action": "approved"}
+    )
+    assert missing_csrf.status_code == 403
+
+    recorded = assistant_env.client.post(
+        url,
+        json={"change_set_id": change_set_id, "action": "approved"},
+        headers=assistant_env.csrf(),
+    )
+    assert recorded.status_code == 200
+
+    with assistant_env.sessions() as db:
+        events = (
+            db.query(AssistantEvent)
+            .filter(AssistantEvent.conversation_id == UUID(conversation_id))
+            .all()
+        )
+    approved = [event for event in events if event.event_type == "proposal.approved"]
+    assert approved
+    payload = approved[-1].payload
+    assert payload["change_set_id"] == change_set_id
+    assert "operations" not in json.dumps(payload)
+    assert len(json.dumps(payload)) < 500
+
+
+def test_proposal_event_rejects_unreferenced_change_set(assistant_env) -> None:
+    conversation_id = _conversation(assistant_env)
+    referenced = _create_proposal(assistant_env, conversation_id)["result"]["change_set_id"]
+    _reference_change_set(assistant_env, conversation_id, referenced)
+    other = _create_proposal(assistant_env, conversation_id)["result"]["change_set_id"]
+    response = assistant_env.client.post(
+        f"/api/workspaces/{assistant_env.workspace_id}/assistant/conversations/"
+        f"{conversation_id}/proposal-events",
+        json={"change_set_id": other, "action": "applied"},
+        headers=assistant_env.csrf(),
+    )
+    assert response.status_code == 404
+
+
 def test_conversation_deletion_preserves_change_set_and_audit(assistant_env) -> None:
     conversation_id = _conversation(assistant_env)
     change_set_id = _create_proposal(assistant_env, conversation_id)["result"]["change_set_id"]

@@ -116,6 +116,8 @@ type Props = {
   search?: string;
   registerNavigationGuard?: (guard: NavigationGuard) => void;
   visible?: boolean;
+  refreshToken?: number;
+  highlightObjectIds?: string[];
   onAssistantScopeChange?: (scope: {
     discipline: string;
     workbenchView: string;
@@ -190,7 +192,7 @@ export default function ArchitectureCanvas(props: Props) {
   );
 }
 
-function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegration, onOpenCatalog, search = "", registerNavigationGuard, visible = true, onAssistantScopeChange }: Props) {
+function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegration, onOpenCatalog, search = "", registerNavigationGuard, visible = true, refreshToken, highlightObjectIds, onAssistantScopeChange }: Props) {
   const flow = useReactFlow<ArchitectureOccurrenceNode, RelationshipEdge>();
   const { requestFocus } = useWorkbenchNavigation();
   const canvasElement = React.useRef<HTMLDivElement>(null);
@@ -267,6 +269,15 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     wasVisible.current = visible;
   }, [visible, activeStateId, load, flow]);
 
+  // Reload architecture data when the workspace asks for a refresh (after an
+  // assistant apply/undo) without remounting or losing the viewport.
+  const lastRefreshToken = React.useRef(refreshToken);
+  React.useEffect(() => {
+    if (refreshToken === undefined || refreshToken === lastRefreshToken.current) return;
+    lastRefreshToken.current = refreshToken;
+    void load();
+  }, [refreshToken, load]);
+
   React.useEffect(() => {
     if (!workspaceId || !workspace?.disciplines.length) return;
     const nextDiscipline = readStoredDiscipline(workspaceId, workspace.disciplines);
@@ -303,6 +314,8 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
       return;
     }
     const applyOverrides = activeState.state_type !== "current";
+    const highlight =
+      highlightObjectIds && highlightObjectIds.length > 0 ? new Set(highlightObjectIds) : null;
     setNodes(() =>
       visibleStateNodes.map((occurrence) => {
         const resolved = resolveOccurrence(
@@ -315,6 +328,10 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
           id: occurrence.occurrence_id,
           type: boundaryGeometry.has(occurrence.occurrence_id) ? "boundary" : "occurrence",
           position: boundaryGeometry.get(occurrence.occurrence_id)?.position ?? occurrence.position,
+          className:
+            highlight && highlight.has(String(resolved.objectId))
+              ? "architecture-node-highlighted"
+              : undefined,
           ...(boundaryGeometry.has(occurrence.occurrence_id) ? {
             style: {
               width: boundaryGeometry.get(occurrence.occurrence_id)?.width,
@@ -347,6 +364,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     architectureObjectsById,
     editable,
     handleRemoveOccurrence,
+    highlightObjectIds,
     selectedOccurrenceId,
     systemsById,
     visibleStateNodes,

@@ -137,6 +137,8 @@ export default function CatalogWorkspace({
   const [activeView, setActiveView] = React.useState<"canvas" | "catalog" | "integrations">("canvas");
   const [assistantOpen, setAssistantOpen] = React.useState(false);
   const [assistantScope, setAssistantScope] = React.useState<CanvasScope>(DEFAULT_CANVAS_SCOPE);
+  const [architectureRefreshToken, setArchitectureRefreshToken] = React.useState(0);
+  const [appliedHighlights, setAppliedHighlights] = React.useState<string[]>([]);
   const [architectureStates, setArchitectureStates] = React.useState<
     { id: string; name: string; state_type: string }[]
   >([]);
@@ -247,6 +249,10 @@ export default function CatalogWorkspace({
     return () => {
       cancelled = true;
     };
+  }, [activeWorkspace?.id, architectureRefreshToken]);
+
+  React.useEffect(() => {
+    setAppliedHighlights([]);
   }, [activeWorkspace?.id]);
 
   const refreshObjects = React.useCallback(async (currentSystemId: string, preferId?: string) => {
@@ -711,6 +717,8 @@ export default function CatalogWorkspace({
           key={activeWorkspace?.id ?? "loading"}
           workspace={activeWorkspace}
           visible={activeView === "canvas"}
+          refreshToken={architectureRefreshToken}
+          highlightObjectIds={appliedHighlights}
           onAssistantScopeChange={setAssistantScope}
           search={activeView === "canvas" ? studioSearch : ""}
           registerNavigationGuard={registerCanvasGuard}
@@ -999,6 +1007,15 @@ export default function CatalogWorkspace({
         selectionIds={assistantViewScope.selectionIds}
         open={assistantOpen}
         onClose={() => setAssistantOpen(false)}
+        onProposalApplied={(result) => {
+          setAppliedHighlights(result.affected_objects);
+          setArchitectureRefreshToken((value) => value + 1);
+        }}
+        onProposalUndone={() => {
+          setAppliedHighlights([]);
+          setArchitectureRefreshToken((value) => value + 1);
+        }}
+        onProposalHighlightsCleared={() => setAppliedHighlights([])}
       />
     </main>
   );

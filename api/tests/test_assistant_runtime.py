@@ -140,6 +140,37 @@ def test_oversized_response_is_rejected() -> None:
         runtime.close()
 
 
+def test_transcript_uses_its_own_larger_ceiling() -> None:
+    """A multi-step turn's transcript exceeds the tight per-response cap."""
+    settings = make_settings(max_response_bytes=4096, max_transcript_bytes=2_000_000)
+    body = b"[" + b"x" * 200_000 + b"]"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": body.decode()})
+
+    runtime = runtime_with(settings, handler)
+    try:
+        # Under the transcript ceiling: read successfully.
+        assert runtime.messages("ses_1")
+    finally:
+        runtime.close()
+
+
+def test_oversized_transcript_is_still_rejected() -> None:
+    settings = make_settings(max_transcript_bytes=1024)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": "x" * 200_000})
+
+    runtime = runtime_with(settings, handler)
+    try:
+        with pytest.raises(AssistantRuntimeError) as raised:
+            runtime.messages("ses_1")
+        assert raised.value.code is RuntimeErrorCode.RESPONSE_TOO_LARGE
+    finally:
+        runtime.close()
+
+
 def test_redirect_is_rejected_and_never_followed() -> None:
     recorder = Recorder()
 
