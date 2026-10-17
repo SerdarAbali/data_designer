@@ -12,7 +12,9 @@ import {
   type NodeTypes,
   type Viewport,
 } from "@xyflow/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+
+import { withEdgeObstacles } from "../../components/architecture/edgeObstacles";
 
 type Props<NodeType extends Node, EdgeType extends Edge> = {
   ariaLabel: string;
@@ -57,6 +59,12 @@ export default function InformationProjectionCanvas<NodeType extends Node, EdgeT
     setFlowNodes(nodes);
   }, [nodes]);
 
+  // Connectors route orthogonally around the other node boxes.
+  const routedEdges = useMemo(
+    () => withEdgeObstacles(flowNodes, edges),
+    [flowNodes, edges],
+  );
+
   if (nodes.length === 0 && emptyState) {
     return <div className="information-projection-empty">{emptyState}</div>;
   }
@@ -65,7 +73,7 @@ export default function InformationProjectionCanvas<NodeType extends Node, EdgeT
     <div className="architecture-canvas information-projection-canvas" aria-label={ariaLabel}>
       <ReactFlow<NodeType, EdgeType>
         nodes={flowNodes}
-        edges={edges}
+        edges={routedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={(changes: NodeChange<NodeType>[]) => {

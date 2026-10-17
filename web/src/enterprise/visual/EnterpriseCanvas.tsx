@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Background,
   Controls,
@@ -15,6 +15,8 @@ import {
   type EdgeTypes,
   type Viewport,
 } from "@xyflow/react";
+
+import { withEdgeObstacles } from "../../components/architecture/edgeObstacles";
 
 type Props<NodeType extends Node, EdgeType extends Edge> = {
   ariaLabel: string;
@@ -57,11 +59,17 @@ export default function EnterpriseCanvas<NodeType extends Node, EdgeType extends
     setLocalNodes((current) => applyNodeChanges(changes, current));
   }, []);
 
+  // Connectors route orthogonally around the other node boxes.
+  const routedEdges = useMemo(
+    () => withEdgeObstacles(localNodes, edges),
+    [localNodes, edges],
+  );
+
   return (
     <div className="enterprise-canvas" aria-label={ariaLabel}>
       <ReactFlow<NodeType, EdgeType>
         nodes={localNodes}
-        edges={edges}
+        edges={routedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={handleNodesChange}

@@ -9,6 +9,7 @@ import {
 } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
 
+import { withEdgeObstacles } from "../components/architecture/edgeObstacles";
 import InformationEntityNode, { type InformationEntityFlowNode } from "./InformationEntityNode";
 import InformationRelationshipEdge, {
   type InformationRelationshipFlowEdge,
@@ -169,6 +170,9 @@ export default function InformationERCanvas({
     [model.relationships, model.entities, nodes, selectedRelationshipId],
   );
 
+  // Connectors route orthogonally around the other entity boxes.
+  const routedEdges = useMemo(() => withEdgeObstacles(nodes, edges), [nodes, edges]);
+
   function handleConnect(connection: Connection) {
     if (!editable || !connection.source || !connection.target) return;
     const sourceEntity = model.entities.find((entity) => entity.occurrence_id === connection.source);
@@ -201,7 +205,7 @@ export default function InformationERCanvas({
     <div className="architecture-canvas information-canvas" aria-label="Information model canvas">
       <ReactFlow<InformationEntityFlowNode, InformationRelationshipFlowEdge>
         nodes={nodes}
-        edges={edges}
+        edges={routedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={(changes: NodeChange<InformationEntityFlowNode>[]) => {

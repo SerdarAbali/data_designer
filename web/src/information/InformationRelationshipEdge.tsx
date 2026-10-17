@@ -1,18 +1,28 @@
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getSmoothStepPath,
   Position,
   type Edge,
   type EdgeProps,
 } from "@xyflow/react";
 
+import {
+  buildRoute,
+  labelPoint,
+  roundedOrthogonalPath,
+  toFlowSide,
+  type Rect,
+} from "../components/architecture/architectureRouting";
 import { cardinalityNotation, type InformationRelationship } from "./informationModel";
 
 export type InformationRelationshipEdgeData = {
   relationship: InformationRelationship;
   laneIndex?: number;
   laneCount?: number;
+  /** Node rectangles the connector routes around (injected by the canvas shell). */
+  obstacles?: Rect[];
+  sourceRect?: Rect;
+  targetRect?: Rect;
 };
 
 export type InformationRelationshipFlowEdge = Edge<
@@ -97,20 +107,20 @@ export default function InformationRelationshipEdge({
   const laneOffset = laneCount > 1
     ? ((data?.laneIndex ?? 0) - (laneCount - 1) / 2) * 18
     : 0;
-  const horizontal =
-    sourcePosition === Position.Left || sourcePosition === Position.Right;
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    borderRadius: 16,
-    offset: 20,
-    centerX: horizontal ? undefined : (sourceX + targetX) / 2 + laneOffset,
-    centerY: horizontal ? (sourceY + targetY) / 2 + laneOffset : undefined,
-  });
+  const points = buildRoute(
+    { x: sourceX, y: sourceY },
+    { x: targetX, y: targetY },
+    toFlowSide(sourcePosition),
+    toFlowSide(targetPosition),
+    data?.obstacles ?? [],
+    laneOffset,
+    undefined,
+    { source: data?.sourceRect, target: data?.targetRect },
+  );
+  const edgePath = roundedOrthogonalPath(points);
+  const anchor = labelPoint(points);
+  let labelX = anchor.x;
+  let labelY = anchor.y;
 
   const relationship = data?.relationship;
   const notation = relationship

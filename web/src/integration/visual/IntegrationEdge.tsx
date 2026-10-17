@@ -1,13 +1,24 @@
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getBezierPath,
   type Edge,
   type EdgeProps,
 } from "@xyflow/react";
 
+import {
+  buildRoute,
+  labelPoint,
+  roundedOrthogonalPath,
+  toFlowSide,
+  type Rect,
+} from "../../components/architecture/architectureRouting";
+
 export type IntegrationEdgeData = {
   relation: string;
+  /** Node rectangles the connector routes around (injected by the canvas shell). */
+  obstacles?: Rect[];
+  sourceRect?: Rect;
+  targetRect?: Rect;
 };
 
 export type IntegrationFlowEdge = Edge<IntegrationEdgeData, "integrationEdge">;
@@ -37,14 +48,18 @@ export default function IntegrationEdge({
   selected,
   data,
 }: EdgeProps<IntegrationFlowEdge>) {
-  const [path, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
+  const points = buildRoute(
+    { x: sourceX, y: sourceY },
+    { x: targetX, y: targetY },
+    toFlowSide(sourcePosition),
+    toFlowSide(targetPosition),
+    data?.obstacles ?? [],
+    0,
+    undefined,
+    { source: data?.sourceRect, target: data?.targetRect },
+  );
+  const path = roundedOrthogonalPath(points);
+  const anchor = labelPoint(points);
   const relation = data?.relation ?? "";
   const color = RELATION_COLORS[relation] ?? "var(--discipline-integration)";
   return (
@@ -61,7 +76,7 @@ export default function IntegrationEdge({
           <span
             className="integration-projection-edge-label"
             data-relation={relation}
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            style={{ transform: `translate(-50%, -50%) translate(${anchor.x}px, ${anchor.y}px)` }}
           >
             {relation}
           </span>

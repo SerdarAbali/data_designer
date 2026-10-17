@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Background,
   Controls,
@@ -17,6 +17,8 @@ import {
   type EdgeTypes,
   type Viewport,
 } from "@xyflow/react";
+
+import { withEdgeObstacles } from "../components/architecture/edgeObstacles";
 
 type Props<NodeType extends Node, EdgeType extends Edge> = {
   ariaLabel: string;
@@ -69,11 +71,18 @@ export default function SolutionCanvas<NodeType extends Node, EdgeType extends E
     setLocalNodes((current) => applyNodeChanges(changes, current));
   }, []);
 
+  // Every connector routes orthogonally around the other node boxes so a line
+  // never disappears behind a component. Recomputed from live node geometry.
+  const routedEdges = useMemo(
+    () => withEdgeObstacles(localNodes, edges),
+    [localNodes, edges],
+  );
+
   return (
     <div className="solution-canvas" aria-label={ariaLabel}>
       <ReactFlow<NodeType, EdgeType>
         nodes={localNodes}
-        edges={edges}
+        edges={routedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={handleNodesChange}

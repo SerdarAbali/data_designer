@@ -1,14 +1,25 @@
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getBezierPath,
   type Edge,
   type EdgeProps,
 } from "@xyflow/react";
 
+import {
+  buildRoute,
+  labelPoint,
+  roundedOrthogonalPath,
+  toFlowSide,
+  type Rect,
+} from "../../components/architecture/architectureRouting";
+
 export type EnterpriseEdgeData = {
   type: string;
   label: string;
+  /** Node rectangles the connector routes around (injected by the canvas shell). */
+  obstacles?: Rect[];
+  sourceRect?: Rect;
+  targetRect?: Rect;
 };
 
 export type EnterpriseFlowEdge = Edge<EnterpriseEdgeData, "enterpriseEdge">;
@@ -25,14 +36,18 @@ export default function EnterpriseEdge({
   selected,
   data,
 }: EdgeProps<EnterpriseFlowEdge>) {
-  const [path, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
+  const points = buildRoute(
+    { x: sourceX, y: sourceY },
+    { x: targetX, y: targetY },
+    toFlowSide(sourcePosition),
+    toFlowSide(targetPosition),
+    data?.obstacles ?? [],
+    0,
+    undefined,
+    { source: data?.sourceRect, target: data?.targetRect },
+  );
+  const path = roundedOrthogonalPath(points);
+  const anchor = labelPoint(points);
   const color =
     data?.type === "supports" || data?.type === "satisfies"
       ? "var(--discipline-solution)"
@@ -50,7 +65,7 @@ export default function EnterpriseEdge({
         <EdgeLabelRenderer>
           <div
             className={`enterprise-edge-label${selected ? " selected" : ""}`}
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            style={{ transform: `translate(-50%, -50%) translate(${anchor.x}px, ${anchor.y}px)` }}
           >
             {data.label}
           </div>
