@@ -1,7 +1,15 @@
 import React from "react";
+import {
+  ARCHITECTURE_FACT_KEYS,
+  ARCHITECTURE_FACT_LABELS,
+  architectureFactLabel,
+  factDiffersFromCanonical,
+  type ArchitectureFactKey,
+} from "../../architectureFacts";
 import type { ArchitectureObject } from "../../architectureTypes";
 import { ARCHITECTURE_OBJECT_ICONS, type CanonicalSystem } from "../../architectureCanvasModel";
 import type { TraceObjectRef } from "../../workbench/workbenchTypes";
+import EvidencePanel from "./EvidencePanel";
 import ObjectTracePanel from "./ObjectTracePanel";
 import UnifiedInspector from "../inspector/UnifiedInspector";
 import type { SaveStatus } from "./ArchitectureTopBar";
@@ -29,6 +37,8 @@ type Props = {
   onRemove?: () => void;
   workspaceId?: string;
   stateId?: string | null;
+  /** Candidate/Target scalar overrides for the selected occurrence, if any. */
+  overrides?: Record<string, unknown>;
   onNavigateTrace?: (node: TraceObjectRef) => void;
 };
 
@@ -58,6 +68,7 @@ export default function ArchitectureObjectInspector({
   onRemove,
   workspaceId,
   stateId,
+  overrides,
   onNavigateTrace,
 }: Props) {
   const [name, setName] = React.useState("");
@@ -74,6 +85,19 @@ export default function ArchitectureObjectInspector({
   }, [object?.id, object?.name, object?.description, object?.owner, object?.authoritative_system_id]);
 
   if (!object && !system) return null;
+
+  const dirty = Boolean(object) && (
+    name !== (object?.name ?? "") ||
+    description !== (object?.description ?? "") ||
+    (object?.kind === "information_object" && owner !== (object?.owner ?? ""))
+  );
+
+  function resetForm() {
+    setName(object?.name ?? "");
+    setDescription(object?.description ?? "");
+    setOwner(object?.owner ?? "");
+    setError("");
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -95,20 +119,49 @@ export default function ArchitectureObjectInspector({
     }
   }
 
+  const systemFacts = system
+    ? ARCHITECTURE_FACT_KEYS.map((key: ArchitectureFactKey) => {
+        const canonicalRaw = (system as unknown as Record<string, unknown>)[key];
+        const canonical = typeof canonicalRaw === "string" ? canonicalRaw : null;
+        const overrideRaw = overrides?.[key];
+        const override = typeof overrideRaw === "string" ? overrideRaw : null;
+        return {
+          key,
+          label: ARCHITECTURE_FACT_LABELS[key],
+          effective: override ?? canonical,
+          canonical,
+          differs: factDiffersFromCanonical(override, canonical),
+        };
+      })
+    : [];
+
   const properties = system ? (
     <>
-      <strong>{system.name}</strong>
-      <p><strong>Kind:</strong> {system.kind}</p>
-      {system.description && <p>{system.description}</p>}
-      {onOpenCatalog && (
-        <button type="button" className="secondary-button" onClick={onOpenCatalog}>
-          Open catalog
-        </button>
-      )}
+      <section className="inspector-section">
+        <h4 className="inspector-section-title">System</h4>
+        <strong>{system.name}</strong>
+        <p className="inspector-readonly-value">
+          <strong>Kind:</strong> {system.kind}
+        </p>
+        {system.description && <p className="inspector-field-help">{system.description}</p>}
+        <div className="inspector-facts">
+          {systemFacts.map((item) => (
+            <p key={item.key} className="inspector-readonly-value">
+              <strong>{item.label}:</strong> {architectureFactLabel(item.effective)}
+              {item.differs && (
+                <em className="inspector-fact-override">
+                  {" "}
+                  override (baseline: {architectureFactLabel(item.canonical)})
+                </em>
+              )}
+            </p>
+          ))}
+        </div>
+      </section>
     </>
   ) : object ? (
-    <form className="architecture-object-form" onSubmit={(event) => void submit(event)}>
-      <label>
+    <form id="architecture-object-inspector-form" className="architecture-object-form" onSubmit={(event) => void submit(event)}>
+      <label className="inspector-field-label">
         Name
         <input
           value={name}
@@ -118,7 +171,7 @@ export default function ArchitectureObjectInspector({
           disabled={readOnly || saving}
         />
       </label>
-      <label>
+      <label className="inspector-field-label">
         Description
         <textarea
           value={description}
@@ -130,7 +183,7 @@ export default function ArchitectureObjectInspector({
       </label>
       {object.kind === "information_object" && (
         <>
-          <label>
+          <label className="inspector-field-label">
             Owner
             <input
               value={owner}
@@ -140,7 +193,7 @@ export default function ArchitectureObjectInspector({
               disabled={readOnly || saving}
             />
           </label>
-          <p>
+          <p className="inspector-field-help">
             <strong>Authoritative system:</strong>{" "}
             {systems.find((item) => item.id === object.authoritative_system_id)?.name
               ?? "Unavailable"}
@@ -149,21 +202,34 @@ export default function ArchitectureObjectInspector({
       )}
       {error && <p className="error" role="alert">{error}</p>}
       {readOnly ? (
-        <p className="architecture-topbar-hint">Properties shared with Current are read-only here.</p>
-      ) : (
-        <button type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Save object"}
-        </button>
-      )}
+        <p className="inspector-field-help">Properties shared with Current are read-only here.</p>
+      ) : null}
     </form>
   ) : null;
 
   const relationshipsPanel = (
-    <section className="studio-inspector-relationships">
-      <h4>Relationships <span>{relationships.length}</span></h4>
-      {relationships.length === 0 ? <p className="muted">No visible relationships.</p> : relationships.map((relationship) => (
-        <button key={relationship.id} type="button" className="secondary-button" onClick={() => onSelectRelationship(relationship.id)}>{relationship.label}</button>
-      ))}
+    <section className="inspector-section">
+      <div className="information-section-heading">
+        <strong>Relationships</strong>
+        <span className="item-count">{relationships.length}</span>
+      </div>
+      {relationships.length === 0 ? (
+        <div className="inspector-empty">No visible relationships.</div>
+      ) : (
+        <ul className="inspector-relationship-list">
+          {relationships.map((relationship) => (
+            <li key={relationship.id}>
+              <button
+                type="button"
+                className="inspector-relationship-item"
+                onClick={() => onSelectRelationship(relationship.id)}
+              >
+                {relationship.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 
@@ -175,7 +241,50 @@ export default function ArchitectureObjectInspector({
       onNavigate={onNavigateTrace}
     />
   ) : (
-    <p className="muted">Traceability is unavailable for this object.</p>
+    <div className="inspector-empty">Traceability is unavailable for this object.</div>
+  );
+
+  const evidencePanel =
+    workspaceId && object ? (
+      <EvidencePanel
+        workspaceId={workspaceId}
+        stateId={stateId ?? null}
+        targetKind="architecture_object"
+        targetId={object.id}
+        readOnly={readOnly}
+      />
+    ) : (
+      <div className="inspector-empty">
+        {system
+          ? "Evidence attaches to architecture objects, relationships, contracts and solution members."
+          : "Evidence is unavailable for this object."}
+      </div>
+    );
+
+  const manageItems = (
+    <>
+      {onOpenCatalog && (
+        <button type="button" className="more-menu-item" onClick={onOpenCatalog}>
+          Open related Catalog object
+        </button>
+      )}
+      {onRemove && !readOnly && (
+        <>
+          <hr className="more-menu-separator" />
+          <button
+            type="button"
+            className="more-menu-item more-menu-item--danger"
+            onClick={() => {
+              if (window.confirm("Remove this object from the current state? This does not delete the catalog object.")) {
+                onRemove();
+              }
+            }}
+          >
+            Remove from this state
+          </button>
+        </>
+      )}
+    </>
   );
 
   return (
@@ -201,12 +310,26 @@ export default function ArchitectureObjectInspector({
       panels={[
         { id: "properties", label: "Properties", content: properties },
         { id: "relationships", label: "Relationships", count: relationships.length, content: relationshipsPanel },
+        { id: "evidence", label: "Evidence", content: evidencePanel },
         { id: "traceability", label: "Traceability", content: traceability },
       ]}
-      footer={onRemove ? (
-        <button type="button" className="secondary-button architecture-danger" onClick={onRemove}>
-          Remove from this state
-        </button>
+      manageMenu={manageItems}
+      footer={!readOnly && object ? (
+        <div className="inspector-form-actions">
+          {dirty && (
+            <button type="button" className="btn btn--secondary" onClick={resetForm} disabled={saving}>
+              Reset
+            </button>
+          )}
+          <button
+            type="submit"
+            form="architecture-object-inspector-form"
+            className="btn btn--primary"
+            disabled={!dirty || saving || !name.trim()}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
       ) : undefined}
     />
   );

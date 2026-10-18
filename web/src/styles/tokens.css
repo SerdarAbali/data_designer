@@ -1,30 +1,235 @@
+/*
+ * Data Designer — shared semantic design tokens.
+ *
+ * Single source of truth for every theme token used by style.css, studio.css,
+ * assistant.css and workbench components. Light and dark variants are defined
+ * here so no component file re-declares the same custom property.
+ *
+ * Effective values match the previously active studio.css tokens so existing
+ * surfaces do not shift. Missing semantic tokens (selected, disabled, focus
+ * ring, info, warning, danger, added, changed, removed, reused, draft,
+ * validated, approved, applied, undone, shadow levels, spacing scale) are
+ * added in both themes.
+ */
+
 :root {
+  /* Typography */
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  color: #202b38;
-  background: #f4f6f8;
+  color: var(--color-ink);
+  background: var(--color-app);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  --color-ink: #202b38;
-  --color-muted: #647386;
-  --color-border: #e1e6eb;
-  --color-border-strong: #cbd5df;
-  --color-surface: #fff;
-  --color-surface-muted: #f8fafb;
-  --color-accent: #315f85;
-  --color-accent-soft: #edf4f8;
-  --color-draft: #b7812e;
-  --color-healthy: #43805b;
-  --color-attention: #b65d45;
-  --radius-sm: 7px;
-  --radius-md: 11px;
-  --radius-lg: 16px;
-  --shadow-panel: 0 8px 28px rgb(27 39 52 / 5%);
+  /* ========================================================================
+     Surfaces
+     ======================================================================== */
+  --color-app: #f1f3f6;
+  --color-canvas: #fafbfc;
+  --color-grid: #dbe0e7;
+
+  --color-surface: #ffffff;
+  --color-surface-muted: #f5f6f8;
+  --color-surface-elevated: #ffffff;
+  --color-surface-overlay: rgba(255, 255, 255, 0.95);
+
+  /* ========================================================================
+     Text
+     ======================================================================== */
+  --color-ink: #252b37;
+  --color-secondary: #4a5a6c;
+  --color-muted: #6b7383;
+  --color-inverse: #ffffff;
+
+  /* ========================================================================
+     Borders
+     ======================================================================== */
+  --color-border: #e1e4ea;
+  --color-border-strong: #cbd0da;
+
+  /* ========================================================================
+     Accent
+     ======================================================================== */
+  --color-accent: #5266a0;
+  --color-accent-hover: #45568a;
+  --color-accent-active: #3a4a77;
+  --color-accent-soft: #eef1fa;
+  --color-on-accent: #ffffff;
+
+  /* ========================================================================
+     States
+     ======================================================================== */
+  --color-selected: #eef1fa;
+  --color-hover-state: #f1f3f6;
+  --color-disabled-bg: #f1f3f6;
+  --color-disabled-text: #a0a6b5;
+  --color-focus-ring: #5266a0;
+
+  /* ========================================================================
+     Semantic status
+     ======================================================================== */
+  --color-info: #5266a0;
+  --color-success: #528267;
+  --color-warning: #b0703a;
+  --color-warning-soft: #f6efdf;
+  --color-danger: #b14c53;
+  --color-danger-soft: #f9e9e9;
+
+  --color-added: #528267;
+  --color-changed: #b0703a;
+  --color-removed: #b14c53;
+  --color-reused: #6b7383;
+
+  --color-draft: #b38337;
+  --color-validated: #528267;
+  --color-approved: #528267;
+  --color-applied: #528267;
+  --color-undone: #6b7383;
+
+  /* Legacy aliases preserved for compatibility */
+  --color-healthy: #528267;
+  --color-attention: #ba6950;
+
+  /* ========================================================================
+     Discipline (diagram) colors — theme values, not component styles
+     ======================================================================== */
+  --discipline-enterprise: #7271bd;
+  --discipline-information: #368c86;
+  --discipline-solution: #9170b8;
+  --discipline-integration: #537eb2;
+  --semantic-interface: #bc913e;
+
+  /* ========================================================================
+     Shadows
+     ======================================================================== */
+  --shadow-1: 0 1px 3px rgb(25 35 55 / 8%);
+  --shadow-2: 0 4px 18px rgb(25 35 55 / 6%);
+  --shadow-3: 0 8px 28px rgb(25 35 55 / 10%);
+  --shadow-panel: 0 4px 18px rgb(25 35 55 / 6%);
+
+  /* ========================================================================
+     Radii
+     ======================================================================== */
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-full: 9999px;
+
+  /* ========================================================================
+     Spacing
+     ======================================================================== */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+}
+
+:root[data-theme="dark"] {
+  /* ========================================================================
+     Surfaces
+     ======================================================================== */
+  --color-app: #25272e;
+  --color-canvas: #1d1f25;
+  --color-grid: #353842;
+
+  --color-surface: #292c34;
+  --color-surface-muted: #30343d;
+  --color-surface-elevated: #2f323c;
+  --color-surface-overlay: rgba(41, 44, 52, 0.95);
+
+  /* ========================================================================
+     Text
+     ======================================================================== */
+  --color-ink: #e1e4ed;
+  --color-secondary: #b8c0d0;
+  --color-muted: #a0a6b5;
+  --color-inverse: #ffffff;
+
+  /* ========================================================================
+     Borders
+     ======================================================================== */
+  --color-border: #393d48;
+  --color-border-strong: #505564;
+
+  /* ========================================================================
+     Accent
+     ======================================================================== */
+  --color-accent: #96a8e0;
+  --color-accent-hover: #a8b8e8;
+  --color-accent-active: #b8c8f0;
+  --color-accent-soft: #353d55;
+  --color-on-accent: #20232c;
+
+  /* ========================================================================
+     States
+     ======================================================================== */
+  --color-selected: #353d55;
+  --color-hover-state: #30343d;
+  --color-disabled-bg: #30343d;
+  --color-disabled-text: #6b7383;
+  --color-focus-ring: #96a8e0;
+
+  /* ========================================================================
+     Semantic status
+     ======================================================================== */
+  --color-info: #96a8e0;
+  --color-success: #8dbca0;
+  --color-warning: #d5ab64;
+  --color-warning-soft: #423c30;
+  --color-danger: #e49299;
+  --color-danger-soft: #463237;
+
+  --color-added: #8dbca0;
+  --color-changed: #d5ab64;
+  --color-removed: #e49299;
+  --color-reused: #a0a6b5;
+
+  --color-draft: #d5ab64;
+  --color-validated: #8dbca0;
+  --color-approved: #8dbca0;
+  --color-applied: #8dbca0;
+  --color-undone: #a0a6b5;
+
+  /* Legacy aliases preserved for compatibility */
+  --color-healthy: #8dbca0;
+  --color-attention: #dea17b;
+
+  /* ========================================================================
+     Discipline (diagram) colors — theme values, not component styles
+     ======================================================================== */
+  --discipline-enterprise: #aaa0df;
+  --discipline-information: #71b8b0;
+  --discipline-solution: #b898dc;
+  --discipline-integration: #85a9d5;
+  --semantic-interface: #d8b16a;
+
+  /* ========================================================================
+     Shadows
+     ======================================================================== */
+  --shadow-1: 0 1px 3px rgb(0 0 0 / 20%);
+  --shadow-2: 0 4px 18px rgb(0 0 0 / 16%);
+  --shadow-3: 0 8px 28px rgb(0 0 0 / 24%);
+  --shadow-panel: 0 4px 18px rgb(0 0 0 / 16%);
+
+  /* ========================================================================
+     Radii (same values in both themes)
+     ======================================================================== */
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-full: 9999px;
+
+  /* ========================================================================
+     Spacing (same values in both themes)
+     ======================================================================== */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
+  --space-8: 32px;
 }

@@ -390,6 +390,82 @@ class TrustBoundary(Base):
     )
 
 
+class SolutionIntegration(Base):
+    """An authoritative association between a Solution Boundary and a Contract.
+
+    Contract ownership cannot be inferred from source/target system membership:
+    an external participating system may sit outside ``SolutionMember`` while its
+    Contract still belongs to the solution. This association is therefore an
+    explicit, state-aware statement with an approved ``role``.
+
+    ``created_in_state_id`` null means canonically applicable; otherwise the
+    association was introduced for one Candidate/Target state.
+    """
+
+    __tablename__ = "solution_integrations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["solution_object_id", "tenant_id"],
+            ["solution_boundaries.object_id", "solution_boundaries.tenant_id"],
+            name="fk_solution_integrations_solution_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["integration_id", "tenant_id"],
+            ["integrations.id", "integrations.tenant_id"],
+            name="fk_solution_integrations_integration_tenant",
+            ondelete="RESTRICT",
+        ),
+        # One association per (solution, contract) inside a state scope. Two
+        # partial indexes are needed because NULL is never equal to NULL in a
+        # unique constraint, so a plain unique would allow duplicate canonical
+        # rows on both PostgreSQL and SQLite.
+        Index(
+            "uq_solution_integrations_canonical",
+            "tenant_id",
+            "solution_object_id",
+            "integration_id",
+            unique=True,
+            postgresql_where=text("created_in_state_id IS NULL"),
+            sqlite_where=text("created_in_state_id IS NULL"),
+        ),
+        Index(
+            "uq_solution_integrations_state",
+            "tenant_id",
+            "solution_object_id",
+            "integration_id",
+            "created_in_state_id",
+            unique=True,
+            postgresql_where=text("created_in_state_id IS NOT NULL"),
+            sqlite_where=text("created_in_state_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_solution_integrations_solution", "tenant_id", "solution_object_id"
+        ),
+        Index("ix_solution_integrations_integration", "tenant_id", "integration_id"),
+        CheckConstraint(
+            "role IN ('owned', 'participating', 'dependency')",
+            name="ck_solution_integrations_role",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    solution_object_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    integration_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="owned")
+    description: Mapped[str | None] = mapped_column(String(500))
+    created_in_state_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("architecture_states.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
 class SolutionMember(Base):
     """Canonical membership of a catalog system in a solution boundary."""
 
@@ -408,6 +484,7 @@ class SolutionMember(Base):
             ondelete="CASCADE",
         ),
         UniqueConstraint("solution_object_id", "system_id", name="uq_solution_members_pair"),
+        UniqueConstraint("id", "tenant_id", name="uq_solution_members_id_tenant"),
         Index("ix_solution_members_solution", "tenant_id", "solution_object_id"),
     )
 
@@ -487,6 +564,7 @@ class ArchitectureRelationship(Base):
             "relationship_type",
             name="uq_architecture_relationships_edge",
         ),
+        UniqueConstraint("id", "tenant_id", name="uq_architecture_relationships_id_tenant"),
         Index("ix_architecture_relationships_source", "tenant_id", "source_object_id"),
         Index("ix_architecture_relationships_target", "tenant_id", "target_object_id"),
         Index("ix_architecture_relationships_type", "tenant_id", "relationship_type"),

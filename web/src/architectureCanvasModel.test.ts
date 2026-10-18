@@ -148,8 +148,11 @@ describe("architectureCanvasModel", () => {
     expect(original.nodes[0]!.position).toEqual({ x: 0, y: 0 });
   });
 
-  it("treats only non-current states as editable", () => {
+  it("follows the baseline lifecycle for a Current state", () => {
+    // A Current state without a recorded status fails closed, like the server.
     expect(isEditableState(state({ state_type: "current" }))).toBe(false);
+    expect(isEditableState(state({ state_type: "current", baseline_status: "locked" }))).toBe(false);
+    expect(isEditableState(state({ state_type: "current", baseline_status: "draft" }))).toBe(true);
     expect(isEditableState(state())).toBe(true);
     expect(isEditableState(null)).toBe(false);
   });

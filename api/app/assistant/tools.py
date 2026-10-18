@@ -244,6 +244,12 @@ _PROPOSAL_HELPERS: tuple[tuple[str, str], ...] = (
     ("propose_resilience_configuration", "integration"),
     ("propose_scenarios", "integration"),
     ("propose_conformance_tests", "integration"),
+    ("propose_system_facts", "any"),
+    ("propose_contract_facts", "integration"),
+    ("propose_contract_mediator", "integration"),
+    ("propose_evidence", "any"),
+    ("propose_solution_contract_association", "solution"),
+    ("propose_solution_relationship", "solution"),
     (end_to_end.COMPOSITE_HELPER, "composite"),
 )
 
@@ -257,7 +263,7 @@ PROPOSAL_TOOL_SPECS: tuple[ProposalToolSpec, ...] = tuple(
             "change-set rows. Never approves, applies, or undoes."
         ),
         args_model=service.PROPOSAL_REQUEST_MODELS[helper],
-        discipline=None if discipline == "composite" else discipline,
+        discipline=None if discipline in {"composite", "any"} else discipline,
         composite=discipline == "composite",
     )
     for helper, discipline in _PROPOSAL_HELPERS
@@ -325,7 +331,7 @@ def allowed_tool_names(disciplines: list[str], state_type: str = "current") -> l
             if spec.composite:
                 if len(enabled) >= 2:
                     names.append(spec.name)
-            elif spec.discipline in enabled:
+            elif spec.discipline is None or spec.discipline in enabled:
                 names.append(spec.name)
     return sorted(set(names))
 

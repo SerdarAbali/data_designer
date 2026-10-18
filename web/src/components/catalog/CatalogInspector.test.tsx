@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import CatalogInspector from "./CatalogInspector";
@@ -15,6 +15,9 @@ const system = {
   color: null,
   position: { x: 12, y: 34 },
   metadata: { tier: 1 },
+  lifecycle_stage: null,
+  operational_status: null,
+  environment_scope: null,
 };
 
 const object = {
@@ -106,6 +109,37 @@ describe("CatalogInspector", () => {
     const metadataTab = screen.getByRole("button", { name: "Metadata" });
     fireEvent.click(metadataTab);
     expect(screen.getByText("Raw metadata JSON").closest(".inspector-tab-panel")?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("shows lifecycle, operational and environment facts with an unspecified default", () => {
+    render(<CatalogInspector {...baseProps} system={system} object={null} field={null} />);
+    const lifecycle = screen.getByLabelText(/Lifecycle stage/) as HTMLSelectElement;
+    const operational = screen.getByLabelText(/Operational status/) as HTMLSelectElement;
+    const environment = screen.getByLabelText(/Environment scope/) as HTMLSelectElement;
+
+    // Unspecified stays the default; null is never coerced into a value.
+    expect(lifecycle.value).toBe("");
+    expect(operational.value).toBe("");
+    expect(environment.value).toBe("");
+    expect(screen.getAllByRole("option", { name: "Unspecified" })).toHaveLength(3);
+
+    expect(within(lifecycle).getByRole("option", { name: "Retired" })).toBeTruthy();
+    expect(within(operational).getByRole("option", { name: "Decommissioned" })).toBeTruthy();
+    expect(within(environment).getByRole("option", { name: "Production" })).toBeTruthy();
+  });
+
+  it("preselects the stored fact values", () => {
+    render(
+      <CatalogInspector
+        {...baseProps}
+        system={{ ...system, lifecycle_stage: "legacy", operational_status: "degraded", environment_scope: "production" }}
+        object={null}
+        field={null}
+      />,
+    );
+    expect((screen.getByLabelText(/Lifecycle stage/) as HTMLSelectElement).value).toBe("legacy");
+    expect((screen.getByLabelText(/Operational status/) as HTMLSelectElement).value).toBe("degraded");
+    expect((screen.getByLabelText(/Environment scope/) as HTMLSelectElement).value).toBe("production");
   });
 
   it("separates field archiving into the danger menu", () => {

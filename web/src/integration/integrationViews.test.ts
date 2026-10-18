@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import type {
   IntegrationContractSummary,
   IntegrationEndpointRef,
+  IntegrationFactValue,
   IntegrationFlowPhase,
   IntegrationLandscape,
   IntegrationMessageFlow,
   IntegrationSequence,
 } from "./integrationDesignModel";
+import { contractMediation } from "./integrationDesignModel";
 import {
   flowStages,
   integrationTopology,
@@ -28,6 +30,10 @@ function endpoint(overrides: Partial<IntegrationEndpointRef>): IntegrationEndpoi
     is_runtime: false,
     ...overrides,
   };
+}
+
+function emptyFact(): IntegrationFactValue {
+  return { value: null, canonical: null, override: null, overridden: false };
 }
 
 function contractShape(overrides: Partial<IntegrationContractSummary>): IntegrationContractSummary {
@@ -57,6 +63,9 @@ function contractShape(overrides: Partial<IntegrationContractSummary>): Integrat
     target_fields_mapped: 0,
     target_fields_total: 0,
     scenario_count: 0,
+    lifecycle_stage: emptyFact(),
+    operational_status: emptyFact(),
+    environment_scope: emptyFact(),
     ...overrides,
   };
 }
@@ -118,6 +127,81 @@ describe("integrationTopology", () => {
     const topology = integrationTopology(landscape);
     const systemNodes = topology.nodes.filter((node) => node.id === "system:sys-a");
     expect(systemNodes).toHaveLength(1);
+  });
+
+  it("draws an explicit mediator as its own node, never as the business target", () => {
+    const explicit = contractShape({
+      id: "explicit",
+      name: "Explicit",
+      mediation_source: "explicit",
+      mediated: true,
+      explicit_mediator: true,
+      mediator: {
+        system_id: "sys-frends",
+        system_name: "FRENDS",
+        system_kind: "runtime",
+        is_runtime: true,
+        responsibility: "Routes the exchange.",
+        explicit: true,
+      },
+    });
+    const topology = integrationTopology({
+      state_id: "state-1",
+      state_type: "candidate",
+      editable: true,
+      contracts: [explicit],
+      interfaces: [],
+    });
+    expect(topology.mediatedContractIds).toEqual(["explicit"]);
+    const mediatorNode = topology.nodes.find((node) => node.refId === "sys-frends");
+    expect(mediatorNode?.kind).toBe("runtime");
+    // The mediator is a distinct node, and the business edge still points at ERP.
+    const mediatedEdge = topology.edges.find(
+      (edge) => edge.source === "contract:explicit" && edge.relation === "mediated by",
+    );
+    expect(mediatedEdge?.target).toBe("system:sys-frends");
+    const businessEdge = topology.edges.find(
+      (edge) => edge.source === "contract:explicit" && edge.target === "system:sys-b",
+    );
+    expect(businessEdge?.relation).toBe("delivers");
+  });
+});
+
+describe("contractMediation", () => {
+  it("reports an explicit mediator and never substitutes an endpoint", () => {
+    const resolution = contractMediation(
+      contractShape({
+        mediation_source: "explicit",
+        mediated: true,
+        explicit_mediator: true,
+        mediator: {
+          system_id: "sys-frends",
+          system_name: "FRENDS",
+          is_runtime: true,
+          responsibility: "Routes.",
+          explicit: true,
+        },
+      }),
+    );
+    expect(resolution.source).toBe("explicit");
+    expect(resolution.mediated).toBe(true);
+    expect(resolution.explicit).toBe(true);
+    expect(resolution.mediator?.system_id).toBe("sys-frends");
+  });
+
+  it("falls back to the legacy runtime-endpoint heuristic for payloads without the projection", () => {
+    const resolution = contractMediation(mediated);
+    expect(resolution.source).toBe("legacy_endpoint_heuristic");
+    expect(resolution.mediated).toBe(true);
+    expect(resolution.explicit).toBe(false);
+    expect(resolution.mediator?.system_name).toBe("Integration Runtime");
+  });
+
+  it("reports a direct contract as non-mediated", () => {
+    const resolution = contractMediation(direct);
+    expect(resolution.source).toBe("none");
+    expect(resolution.mediated).toBe(false);
+    expect(resolution.mediator).toBeNull();
   });
 });
 
@@ -223,6 +307,31 @@ describe("flowStages", () => {
     expect(routing?.detail).toBe("Route by region");
     const retry = stages.find((stage) => stage.id === "metadata:retry:request");
     expect(retry?.detail).toContain("3 attempts");
+  });
+
+  it("names an explicit mediator on the channel stage without moving the endpoints", () => {
+    const explicitFlow: IntegrationMessageFlow = {
+      ...flow,
+      contract: contractShape({
+        mediation_source: "explicit",
+        mediated: true,
+        explicit_mediator: true,
+        mediator: {
+          system_id: "sys-frends",
+          system_name: "FRENDS",
+          is_runtime: true,
+          responsibility: "Routes.",
+          explicit: true,
+        },
+      }),
+    };
+    const stages = flowStages(explicitFlow, request);
+    expect(stages[0].label).toBe("System A");
+    expect(stages[stages.length - 1].label).toBe("System B");
+    const channel = stages.find((stage) => stage.role === "channel");
+    expect(channel?.detail).toContain("via FRENDS");
+    // The explicit mediator is not drawn as an endpoint stage.
+    expect(stages.filter((stage) => stage.role === "runtime")).toHaveLength(0);
   });
 
   it("labels the idempotency stage with the resolved field name, never a raw id", () => {

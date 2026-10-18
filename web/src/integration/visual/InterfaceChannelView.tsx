@@ -1,4 +1,5 @@
 import {
+  contractMediation,
   INTERACTION_TYPE_LABELS,
   PATTERN_LABELS,
   STATUS_LABELS,
@@ -110,7 +111,7 @@ export default function InterfaceChannelView({
   onOpenMapping,
 }: Props) {
   const contract = detail.contract;
-  const mediated = Boolean(contract.source.is_runtime || contract.target.is_runtime);
+  const mediation = contractMediation(contract);
 
   return (
     <section className="integration-interface-view" aria-label="Interface and channel architecture">
@@ -155,8 +156,14 @@ export default function InterfaceChannelView({
                 <dd>{flow.channel_kind ? CHANNEL_LABELS[flow.channel_kind] : "Not configured"}</dd>
               </div>
               <div>
-                <dt>Runtime</dt>
-                <dd>{mediated ? "Mediated by Integration Runtime" : "Direct connection"}</dd>
+                <dt>Mediator</dt>
+                <dd>
+                  {mediation.mediator
+                    ? `${mediation.mediator.system_name} · ${
+                        mediation.explicit ? "explicit" : "inferred (legacy heuristic)"
+                      }`
+                    : "Direct connection"}
+                </dd>
               </div>
               <div>
                 <dt>Revision</dt>

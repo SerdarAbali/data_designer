@@ -379,12 +379,28 @@ def test_thin_architecture_objects_reuse_systems_and_are_candidate_isolated(clie
     assert {node["object_id"] for node in current_after["nodes"]} == {system["id"]}
     assert current_after["relationships"] == []
 
+    # A draft Current accepts the same state write until the baseline is locked.
+    draft_write = test_client.put(
+        f"/api/workspaces/{workspace['id']}/states/{current['id']}",
+        json={"nodes": current_after["nodes"], "relationships": []},
+        headers=headers,
+    )
+    assert draft_write.status_code == 200, draft_write.text
+
+    locked = test_client.post(
+        f"/api/workspaces/{workspace['id']}/states/{current['id']}/lock-baseline",
+        json={"confirm_empty": False},
+        headers=headers,
+    )
+    assert locked.status_code == 200, locked.text
+
     current_write = test_client.put(
         f"/api/workspaces/{workspace['id']}/states/{current['id']}",
         json={"nodes": current_after["nodes"], "relationships": []},
         headers=headers,
     )
     assert current_write.status_code == 409
+    assert current_write.json()["detail"]["code"] == "current_baseline_locked"
     current_delete = test_client.delete(
         f"/api/workspaces/{workspace['id']}/states/{current['id']}",
         headers=headers,

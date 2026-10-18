@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.architecture.evidence import assert_no_evidence
 from app.architecture.routes import get_accessible_workspace
 from app.architecture.schemas import (
     ArchitectureStateNode,
@@ -54,6 +55,9 @@ from app.architecture.state_scope import (
 )
 from app.architecture.state_scope import (
     set_member_override as _set_member_override,
+)
+from app.architecture.state_scope import (
+    state_is_editable as _state_is_editable,
 )
 from app.architecture.state_scope import (
     state_members as _state_members,
@@ -361,7 +365,7 @@ def _build_model(
     return InformationModelResponse(
         state_id=state.id,
         state_type=state.state_type,
-        editable=state.state_type != "current",
+        editable=_state_is_editable(state),
         entities=entities,
         relationships=relationships,
     )
@@ -677,6 +681,13 @@ def delete_information_attribute(
     _assert_writable(state)
 
     if attribute.created_in_state_id == state.id:
+        # Evidence is never silently dropped: refuse the removal while it is
+        # still supported, so the caller can delete the evidence explicitly.
+        assert_no_evidence(
+            db,
+            workspace.tenant_id,
+            [("architecture_object", attribute_id)],
+        )
         db.execute(
             delete(ArchitectureStateMember).where(
                 ArchitectureStateMember.state_id == state.id,

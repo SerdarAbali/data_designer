@@ -10,11 +10,13 @@ import {
   pruneSelectionForActiveFlow,
   resolveMatrixRowSelection,
   sanitizeCanvasFlowForPhase,
+  toFlowNode,
   transformationPositionBetweenHandles,
   validatePhaseConnection,
   type FlowEdge,
   type FlowNode,
 } from "./IntegrationWorkspace";
+import type { GraphNodeDocument } from "./contractGraphTypes";
 import { edgeAnimationClassName, mapperEdgePath } from "./components/mapper/MapperEdge";
 
 function node(id: string, type: FlowNode["type"] = "fx"): FlowNode {
@@ -383,6 +385,61 @@ describe("field-aware transformation layout and position persistence", () => {
   it("uses compact fallback dimensions when centering a transformation before measurement", () => {
     expect(transformationPositionBetweenHandles({ x: 300, y: 215 }, { x: 920, y: 215 }))
       .toEqual({ x: 535, y: 197 });
+  });
+});
+
+describe("movable canvas nodes", () => {
+  const senderFields = [matrixField("ms1", "Customer ID")];
+  const receiverFields = [matrixField("mr1", "Account ID")];
+  const context = { sourceFields: senderFields, targetFields: receiverFields };
+
+  function graphNode(id: string, type: FlowNode["type"]): GraphNodeDocument {
+    return { id, type: type as GraphNodeDocument["type"], position: { x: 0, y: 0 }, config: {} };
+  }
+
+  it("lets every node be dragged while endpoint frames stay undeletable", () => {
+    const source = toFlowNode(graphNode("source", "source"), [], [], undefined, undefined);
+    const target = toFlowNode(graphNode("target", "target"), [], [], undefined, undefined);
+    const transform = toFlowNode(graphNode("fx", "fx"), [], [], undefined, undefined);
+    expect([source.draggable, target.draggable, transform.draggable]).toEqual([true, true, true]);
+    expect([source.deletable, target.deletable, transform.deletable]).toEqual([false, false, true]);
+  });
+
+  it("keeps moved endpoint coordinates through the layout and a save round-trip", () => {
+    const movedSource = { ...node("source", "source"), position: { x: 40, y: 180 } };
+    const movedTarget = { ...node("target", "target"), position: { x: 900, y: 180 } };
+
+    // Auto-layout must never pull a frame the user positioned back to the origin.
+    const laidOut = applyWorkbenchLayout(
+      [movedSource, movedTarget],
+      [],
+      context,
+      { preservePersisted: true },
+    );
+    expect(laidOut.find((item) => item.id === "source")?.position).toEqual({ x: 40, y: 180 });
+    expect(laidOut.find((item) => item.id === "target")?.position).toEqual({ x: 900, y: 180 });
+
+    const saved = computePhaseGraphsForSave({
+      contractView: "request",
+      nodes: laidOut,
+      edges: [],
+      requestGraphDraft: graphFromFlow([movedSource, movedTarget], []),
+      responseGraphDraft: graphFromFlow([], []),
+      errorResponseGraphDraft: graphFromFlow([], []),
+      phaseEdited: {
+        request: true, "success-response": false, "error-response": false, "async-response": false,
+      },
+    });
+    const reloaded = graphFromFlow(
+      saved.request.nodes.map((item) => ({
+        ...node(item.id, item.type),
+        position: item.position,
+        data: { label: item.id, config: item.config },
+      })),
+      [],
+    );
+    expect(reloaded.nodes.find((item) => item.id === "source")?.position).toEqual({ x: 40, y: 180 });
+    expect(reloaded.nodes.find((item) => item.id === "target")?.position).toEqual({ x: 900, y: 180 });
   });
 });
 

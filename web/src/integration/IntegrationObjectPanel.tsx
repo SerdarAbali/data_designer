@@ -1,10 +1,14 @@
+import { architectureFactLabel } from "../architectureFacts";
+import EvidencePanel from "../components/architecture/EvidencePanel";
 import ObjectTracePanel from "../components/architecture/ObjectTracePanel";
 import type { TraceObjectRef } from "../workbench/workbenchTypes";
 import {
+  contractMediation,
   INTERACTION_TYPE_LABELS,
   PATTERN_LABELS,
   STATUS_LABELS,
   type IntegrationContractSummary,
+  type IntegrationFactValue,
   type IntegrationInterfaceSummary,
 } from "./integrationDesignModel";
 import type { IntegrationTopologyNode } from "./integrationViews";
@@ -19,6 +23,8 @@ type Props = {
   onOpenCatalog?: () => void;
   onNavigateTrace?: (node: TraceObjectRef) => void;
   onClose: () => void;
+  /** Current is read-only, so evidence is display-only there. */
+  readOnly?: boolean;
 };
 
 const KIND_LABELS: Record<IntegrationTopologyNode["kind"], string> = {
@@ -33,6 +39,16 @@ function fact(label: string, value: string | null | undefined) {
   return { label, value: value && value.length > 0 ? value : "—" };
 }
 
+/**
+ * Effective fact label. When a Candidate/Target state overrides the canonical
+ * baseline the difference is spelled out so the inspector never hides it.
+ */
+function factValueText(value: IntegrationFactValue): string {
+  const effective = architectureFactLabel(value.value);
+  if (!value.overridden) return effective;
+  return `${effective} · override (baseline: ${architectureFactLabel(value.canonical)})`;
+}
+
 export default function IntegrationObjectPanel({
   node,
   workspaceId,
@@ -43,6 +59,7 @@ export default function IntegrationObjectPanel({
   onOpenCatalog,
   onNavigateTrace,
   onClose,
+  readOnly = false,
 }: Props) {
   const iface = node.kind === "interface" ? interfaces.find((item) => item.object_id === node.refId) : null;
   const contract = node.kind === "contract" ? contracts.find((item) => item.id === node.refId) : null;
@@ -52,6 +69,8 @@ export default function IntegrationObjectPanel({
           (item) => item.source.system_id === node.refId || item.target.system_id === node.refId,
         )
       : [];
+
+  const mediation = contract ? contractMediation(contract) : null;
 
   const facts =
     node.kind === "interface" && iface
@@ -68,10 +87,30 @@ export default function IntegrationObjectPanel({
             fact("Interaction", INTERACTION_TYPE_LABELS[contract.interaction_type] ?? contract.interaction_type),
             fact("Pattern", contract.pattern ? PATTERN_LABELS[contract.pattern] ?? contract.pattern : null),
             fact("Implementation", contract.implementation_status),
+            fact("Lifecycle stage", factValueText(contract.lifecycle_stage)),
+            fact("Operational status", factValueText(contract.operational_status)),
+            fact("Environment scope", factValueText(contract.environment_scope)),
             fact("Status", STATUS_LABELS[contract.status] ?? contract.status),
             fact("Revision", `r${contract.revision}`),
-            fact("Source", `${contract.source.system_name} · ${contract.source.object_name}`),
-            fact("Target", `${contract.target.system_name} · ${contract.target.object_name}`),
+            fact("Business source", `${contract.source.system_name} · ${contract.source.object_name}`),
+            // Mediation facts are only shown when a mediator is actually known,
+            // so a direct Contract keeps exactly its previous presentation.
+            ...(mediation && mediation.mediated
+              ? [
+                  fact(
+                    "Mediator",
+                    mediation.mediator
+                      ? `${mediation.mediator.system_name}${mediation.explicit ? "" : " (inferred)"}`
+                      : null,
+                  ),
+                  fact("Mediator responsibility", mediation.mediator?.responsibility),
+                  fact(
+                    "Mediation",
+                    mediation.explicit ? "Explicit" : "Inferred · legacy endpoint heuristic",
+                  ),
+                ]
+              : []),
+            fact("Business target", `${contract.target.system_name} · ${contract.target.object_name}`),
           ]
         : [
             fact("Kind", node.subtitle),
@@ -129,6 +168,18 @@ export default function IntegrationObjectPanel({
           </ul>
         </div>
       )}
+
+      <section className="integration-inspector-facts">
+        {contract && workspaceId && (
+          <EvidencePanel
+            workspaceId={workspaceId}
+            stateId={stateId ?? null}
+            targetKind="integration"
+            targetId={contract.id}
+            readOnly={readOnly}
+          />
+        )}
+      </section>
 
       <div className="integration-inspector-actions">
         {contract && (

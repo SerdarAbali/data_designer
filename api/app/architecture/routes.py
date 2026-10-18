@@ -17,6 +17,7 @@ from app.architecture.schemas import (
     IncludeObjectsResponse,
     IncludeObjectsSkipped,
 )
+from app.architecture.state_scope import BASELINE_DRAFT, assert_writable
 from app.auth.dependencies import (
     AuthenticatedUser,
     get_auth_session,
@@ -46,7 +47,19 @@ def get_accessible_workspace(db: Session, user: AuthenticatedUser, workspace_id:
     return workspace
 
 
-def auto_initialize_current_state(db: Session, workspace: Workspace) -> ArchitectureState:
+def auto_initialize_current_state(
+    db: Session,
+    workspace: Workspace,
+    *,
+    baseline_status: str = BASELINE_DRAFT,
+) -> ArchitectureState:
+    """Create the workspace's Current state.
+
+    This is the lazy first-read initializer: it captures the Catalog systems and
+    Contracts that exist by then and starts the baseline as a draft, so the user
+    can capture and confirm it. The Candidate-starter option passes ``locked``
+    explicitly. Existing Current rows are locked by the Slice 8C migration.
+    """
     # Build nodes from active canonical catalog systems in tenant
     systems = list(
         db.scalars(
@@ -124,6 +137,7 @@ def auto_initialize_current_state(db: Session, workspace: Workspace) -> Architec
         name="Current State",
         state_type="current",
         description="Authoritative current state architecture",
+        baseline_status=baseline_status,
         nodes=nodes,
         relationships=relationships,
         created_at=datetime.now(UTC),
@@ -275,11 +289,7 @@ def update_architecture_state(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Architecture state not found"
         )
-    if state.state_type == "current":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Current architecture state is read-only",
-        )
+    assert_writable(state)
 
     if payload.name is not None and payload.name.strip() != state.name:
         existing = db.scalar(
@@ -425,9 +435,14 @@ def delete_architecture_state(
             status_code=status.HTTP_404_NOT_FOUND, detail="Architecture state not found"
         )
     if state.state_type == "current":
+        # Deleting the baseline itself is not part of the capture/lock lifecycle:
+        # the Current state is the workspace's baseline container either way.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Current architecture state is read-only",
+            detail={
+                "code": "current_state_protected",
+                "message": "The Current state cannot be deleted.",
+            },
         )
 
     state.deleted_at = datetime.now(UTC)
@@ -463,8 +478,10 @@ def include_objects_in_state(
 ) -> IncludeObjectsResponse:
     """Append explicitly selected imported objects to an architecture state.
 
-    This is the controlled enrichment path for the read-only Current state:
-    only the objects the user selected are placed, and nothing is removed.
+    This is the controlled enrichment path for a writable state — including the
+    Current baseline while it is still a draft. Only the objects the user
+    selected are placed, nothing is removed, and a locked Current refuses the
+    write through the shared policy.
     """
 
     require_csrf(request, auth_session)
@@ -480,6 +497,9 @@ def include_objects_in_state(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Architecture state not found"
         )
+    # Inclusion is a structural change, so it follows the same policy as every
+    # other write: allowed while Current is a draft, refused once it is locked.
+    assert_writable(state)
 
     nodes = [dict(node) for node in (state.nodes or [])]
     relationships = [dict(item) for item in (state.relationships or [])]

@@ -17,6 +17,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.architecture.vocabulary import (
+    ENVIRONMENT_SCOPES,
+    LIFECYCLE_STAGES,
+    OPERATIONAL_STATUSES,
+    sql_in_list,
+)
 from app.db import Base
 
 json_type = JSON().with_variant(JSONB(), "postgresql")
@@ -24,6 +30,10 @@ json_type = JSON().with_variant(JSONB(), "postgresql")
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+# The generic facts that a Candidate/Target state may override per contract.
+FACT_FIELDS: tuple[str, ...] = ("lifecycle_stage", "operational_status", "environment_scope")
 
 
 class Integration(Base):
@@ -59,6 +69,15 @@ class Integration(Base):
             name="fk_integrations_consumer_interface",
             ondelete="RESTRICT",
         ),
+        # An explicit mediator is a Catalog system in the same tenant. It is a
+        # composite FK (not just a plain one) so a cross-tenant mediator is
+        # impossible at the database level as well as in the API.
+        ForeignKeyConstraint(
+            ["mediator_system_id", "tenant_id"],
+            ["systems.id", "systems.tenant_id"],
+            name="fk_integrations_mediator_system",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("id", "tenant_id", name="uq_integrations_id_tenant"),
         Index(
             "uq_integrations_active_name",
@@ -75,6 +94,11 @@ class Integration(Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
             sqlite_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
+        ),
+        Index(
+            "ix_integrations_mediator_system",
+            "tenant_id",
+            "mediator_system_id",
         ),
         CheckConstraint(
             "jsonb_typeof(graph) = 'object'",
@@ -95,6 +119,25 @@ class Integration(Base):
         CheckConstraint(
             "implementation_status IN ('draft', 'in_progress', 'built', 'verified')",
             name="ck_integrations_implementation_status",
+        ),
+        CheckConstraint(
+            f"lifecycle_stage IN {sql_in_list(LIFECYCLE_STAGES)}",
+            name="ck_integrations_lifecycle_stage",
+        ),
+        CheckConstraint(
+            f"operational_status IN {sql_in_list(OPERATIONAL_STATUSES)}",
+            name="ck_integrations_operational_status",
+        ),
+        CheckConstraint(
+            f"environment_scope IN {sql_in_list(ENVIRONMENT_SCOPES)}",
+            name="ck_integrations_environment_scope",
+        ),
+        # A mediator is an overlay, never a substitute for a business endpoint.
+        CheckConstraint(
+            "mediator_system_id IS NULL OR ("
+            "mediator_system_id != source_system_id "
+            "AND mediator_system_id != target_system_id)",
+            name="ck_integrations_mediator_distinct",
         ),
         CheckConstraint(
             "jsonb_typeof(trigger_config) = 'object'",
@@ -141,8 +184,18 @@ class Integration(Base):
     implementation_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="draft"
     )
+    # Generic lifecycle/operational/environment facts. ``None`` means "not
+    # specified" and is never coerced into a concrete value.
+    lifecycle_stage: Mapped[str | None] = mapped_column(String(32))
+    operational_status: Mapped[str | None] = mapped_column(String(32))
+    environment_scope: Mapped[str | None] = mapped_column(String(32))
     producer_interface_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     consumer_interface_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    # Canonical, Current-baseline mediation overlay. ``None`` means "no mediator
+    # is explicitly modelled" and is never inferred or coerced. The business
+    # direction (source -> target) is unaffected and never rewritten.
+    mediator_system_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    mediator_responsibility: Mapped[str | None] = mapped_column(String(300))
     specification: Mapped[dict] = mapped_column(json_type, nullable=False, default=dict)
     sample_rows: Mapped[list] = mapped_column(json_type, nullable=False, default=list)
     external_identifier: Mapped[str | None] = mapped_column(String(255))
@@ -219,6 +272,7 @@ class IntegrationDependency(Base):
             "downstream_integration_id",
             name="uq_integration_dependency",
         ),
+        UniqueConstraint("id", "tenant_id", name="uq_integration_dependencies_id_tenant"),
         Index(
             "ix_integration_dependencies_upstream",
             "tenant_id",
@@ -242,3 +296,61 @@ class IntegrationDependency(Base):
     upstream_integration_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     downstream_integration_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class IntegrationStateOverride(Base):
+    """Bounded, state-specific overrides for generic contract facts.
+
+    The canonical ``integrations`` row remains the Current baseline. This table
+    only carries Candidate/Target deltas for lifecycle stage, operational status
+    and environment scope. It is intentionally separate from
+    ``ArchitectureStateMember`` (which overrides architecture objects) because a
+    contract is not an architecture object. ``NULL`` in a column means the fact
+    is *not overridden* in that state; it never means "set to a concrete value".
+    """
+
+    __tablename__ = "integration_state_overrides"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["integration_id", "tenant_id"],
+            ["integrations.id", "integrations.tenant_id"],
+            name="fk_integration_state_overrides_integration",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "state_id",
+            "integration_id",
+            name="uq_integration_state_overrides_state_integration",
+        ),
+        CheckConstraint(
+            f"lifecycle_stage IN {sql_in_list(LIFECYCLE_STAGES)}",
+            name="ck_integration_state_overrides_lifecycle_stage",
+        ),
+        CheckConstraint(
+            f"operational_status IN {sql_in_list(OPERATIONAL_STATUSES)}",
+            name="ck_integration_state_overrides_operational_status",
+        ),
+        CheckConstraint(
+            f"environment_scope IN {sql_in_list(ENVIRONMENT_SCOPES)}",
+            name="ck_integration_state_overrides_environment_scope",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    state_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("architecture_states.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    integration_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    lifecycle_stage: Mapped[str | None] = mapped_column(String(32))
+    operational_status: Mapped[str | None] = mapped_column(String(32))
+    environment_scope: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )

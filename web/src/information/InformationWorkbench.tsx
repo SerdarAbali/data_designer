@@ -292,14 +292,31 @@ export default function InformationWorkbench({
 
   return (
     <div className={`information-workbench${!inspectorCollapsed && (selectedEntity || selectedRelationship) ? " has-panel" : ""}`}>
-      <div className="information-toolbar">
-        <button type="button" className="studio-add-menu" disabled={!editable || busy || !stateId} onClick={() => void handleCreateEntity()}>
-          + New entity
-        </button>
-        <span className="information-toolbar-hint">
-          {editable ? "Drag between entity handles to create a relationship." : "Current state is read-only. Duplicate it to model changes."}
-        </span>
-        <button type="button" className="secondary-button" onClick={onOpenCatalog}>Open catalog</button>
+      <div className="view-toolbar">
+        <div className="view-toolbar-left">
+          <div className="view-toolbar-title">
+            <p className="eyebrow">Information</p>
+            <h2>Logical Model</h2>
+          </div>
+          <span className="view-toolbar-scope" title={model ? `${model.entities.length} entity(ies)` : "No model loaded"}>
+            {model ? `${model.entities.length} entities` : "—"}
+          </span>
+        </div>
+        <div className="view-toolbar-right">
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={!editable || busy || !stateId}
+            onClick={() => void handleCreateEntity()}
+          >
+            + New entity
+          </button>
+          {onOpenCatalog && (
+            <button type="button" className="btn btn--secondary" onClick={onOpenCatalog}>
+              Open catalog
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -330,6 +347,9 @@ export default function InformationWorkbench({
             <div className="landscape-empty" role="status">Loading information model…</div>
           ) : (
             <div className="information-canvas-host">
+              {editable && model && model.entities.length === 0 && (
+                <p className="canvas-hint">Drag between entity handles to create a relationship.</p>
+              )}
               {view === "logical" && visibleModel && (
                 <InformationERCanvas
                   model={visibleModel}

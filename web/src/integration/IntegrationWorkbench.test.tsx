@@ -141,6 +141,9 @@ const contract: IntegrationContractSummary = {
   target_fields_mapped: 1,
   target_fields_total: 2,
   scenario_count: 2,
+  lifecycle_stage: { value: null, canonical: null, override: null, overridden: false },
+  operational_status: { value: "live", canonical: "live", override: null, overridden: false },
+  environment_scope: { value: "retiring", canonical: "tested", override: "retiring", overridden: true },
 };
 
 const landscape: IntegrationLandscape = {
@@ -499,7 +502,7 @@ describe("IntegrationWorkbench", () => {
     const picker = await screen.findByLabelText("Contract");
     expect((picker as HTMLSelectElement).value).toBe("");
     fireEvent.change(picker, { target: { value: "int-1" } });
-    expect(await screen.findByText(/CRM · Customer → ERP · Account/)).toBeTruthy();
+    expect(await screen.findByText(/CRM → ERP/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Message Flow" }));
     await screen.findByText("validate: required");
     expect((screen.getByLabelText("Contract") as HTMLSelectElement).value).toBe("int-1");

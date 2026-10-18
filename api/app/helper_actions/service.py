@@ -19,8 +19,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.architecture.state_scope import present_in_current
+from app.architecture.vocabulary import (
+    ENVIRONMENT_SCOPES,
+    LIFECYCLE_STAGES,
+    OPERATIONAL_STATUSES,
+)
 from app.engine.operations import NODE_CONFIG_KEYS, OperationFailure, validate_node_config
-from app.helper_actions import end_to_end, integration_proposals, matching, proposals
+from app.helper_actions import (
+    end_to_end,
+    integration_proposals,
+    matching,
+    proposals,
+    refinement_proposals,
+)
 from app.helper_actions.context import (
     HelperContext,
     require_discipline,
@@ -37,13 +48,16 @@ from app.helper_actions.schemas import (
 from app.models import (
     ArchitectureInterface,
     ArchitectureObject,
+    ArchitectureRelationship,
     CatalogField,
     CatalogSystem,
     HelperAuditEvent,
     HelperChangeOperation,
     HelperChangeSet,
     Integration,
+    IntegrationDependency,
     Scenario,
+    SolutionMember,
 )
 from app.scenarios.schemas import ScenarioDocument
 
@@ -65,16 +79,19 @@ SLICE3_ACTIONS = {
     "create_scenario",
     "define_conformance_expectation",
 }
+SLICE7_ACTIONS = set(refinement_proposals.REFINEMENT_ACTIONS)
 PROPOSAL_HELPERS = {
     "propose_fixture",
     *proposals.PROFILES,
     *integration_proposals.PROFILES,
+    *refinement_proposals.REQUEST_MODELS,
     end_to_end.COMPOSITE_HELPER,
 }
 PROPOSAL_REQUEST_MODELS: dict[str, type] = {
     "propose_fixture": FixtureProposalRequest,
     **proposals.REQUEST_MODELS,
     **integration_proposals.REQUEST_MODELS,
+    **refinement_proposals.REQUEST_MODELS,
     end_to_end.COMPOSITE_HELPER: EndToEndRequest,
 }
 
@@ -281,6 +298,11 @@ def create_domain_proposal(
         state = require_proposal_state(ctx, payload.state_id)
         built = end_to_end.build_end_to_end_proposal(ctx, payload)
         discipline = "composite"
+    elif helper_name in refinement_proposals.REQUEST_MODELS:
+        discipline = refinement_proposals.DISCIPLINES[helper_name]
+        require_discipline(ctx, discipline)
+        state = require_proposal_state(ctx, payload.state_id)
+        built = refinement_proposals.build(ctx, helper_name, payload)
     elif helper_name in proposals.PROFILES:
         profile = proposals.PROFILES[helper_name]
         require_discipline(ctx, profile.discipline)
@@ -1304,6 +1326,8 @@ def _validate_domain_operation(
     issues: list[dict[str, Any]] = []
     if op.domain_action in SLICE3_ACTIONS:
         return _validate_slice3_operation(ctx, op, by_temp, by_id)
+    if op.domain_action in SLICE7_ACTIONS:
+        return _validate_refinement_operation(ctx, op, by_temp, by_id)
     pv = op.proposed_value or {}
     closure = _dependency_closure(op, by_id)
     action = op.domain_action
@@ -1372,6 +1396,188 @@ def _validate_domain_operation(
     return issues
 
 
+def _validate_refinement_operation(
+    ctx: HelperContext,
+    op: HelperChangeOperation,
+    by_temp: dict[str, HelperChangeOperation],
+    by_id: dict[str, HelperChangeOperation],
+) -> list[dict[str, Any]]:
+    """Deterministic validation for the Slice 7 refinement operations."""
+    issues: list[dict[str, Any]] = []
+    pv = op.proposed_value or {}
+    action = op.domain_action
+
+    if action in {"set_lifecycle", "set_operational_status", "set_environment_scope"}:
+        kind = pv.get("kind")
+        if kind == "catalog_system":
+            if op.target_id is None or matching.find_catalog_system(ctx, op.target_id) is None:
+                issues.append(
+                    {"code": "unknown_target", "message": "The Catalog system is not active"}
+                )
+        elif kind == "contract":
+            if op.target_id is None or matching.find_contract(ctx, op.target_id) is None:
+                issues.append(
+                    {"code": "unknown_target", "message": "The Contract is not active"}
+                )
+        else:
+            issues.append({"code": "unknown_kind", "message": f"Unknown fact target {kind!r}"})
+        field = pv.get("field")
+        if field not in refinement_proposals.FACT_FIELDS:
+            issues.append({"code": "unknown_fact", "message": f"Unknown fact {field!r}"})
+        elif field in (pv.get("changes") or {}):
+            value = (pv.get("changes") or {})[field]
+            allowed = _FACT_VOCABULARIES[field]
+            if value is not None and value not in allowed:
+                issues.append(
+                    {
+                        "code": "invalid_fact_value",
+                        "message": f"{field} must be one of the approved values",
+                    }
+                )
+        else:
+            issues.append(
+                {"code": "missing_change", "message": "The operation carries no change"}
+            )
+        return issues
+
+    if action == "set_contract_mediator":
+        if op.target_id is None:
+            issues.append(
+                {"code": "missing_target", "message": "set_contract_mediator needs a target"}
+            )
+            return issues
+        contract = matching.find_contract(ctx, op.target_id)
+        if contract is None:
+            issues.append({"code": "unknown_target", "message": "The Contract is not active"})
+            return issues
+        mediator_id = _as_uuid(pv.get("mediator_system_id"))
+        if mediator_id is None:
+            issues.append({"code": "missing_mediator", "message": "No mediator was supplied"})
+            return issues
+        mediator = matching.find_catalog_system(ctx, mediator_id)
+        if mediator is None:
+            issues.append({"code": "unknown_mediator", "message": "The mediator is not active"})
+        elif mediator.id == contract.source_system_id:
+            issues.append(
+                {"code": "mediator_is_source", "message": "The mediator cannot be the source"}
+            )
+        elif mediator.id == contract.target_system_id:
+            issues.append(
+                {"code": "mediator_is_target", "message": "The mediator cannot be the target"}
+            )
+        # The mediator is canonical, so a Contract described by Current is protected.
+        if refinement_proposals.contract_used_by_current(ctx, contract.id):
+            issues.append(
+                {
+                    "code": "mediator_affects_current",
+                    "message": (
+                        "This Contract is described by the read-only Current state; its "
+                        "canonical mediator cannot be changed"
+                    ),
+                }
+            )
+        return issues
+
+    if action == "attach_evidence":
+        target_kind = pv.get("target_kind")
+        if target_kind not in refinement_proposals.EVIDENCE_TARGET_KINDS:
+            issues.append(
+                {"code": "unsupported_evidence_target", "message": "Unsupported evidence target"}
+            )
+            return issues
+        target_id = _as_uuid(pv.get("target_id")) or op.target_id
+        if target_id is None:
+            issues.append({"code": "missing_target", "message": "Evidence needs a target"})
+        elif not _evidence_target_available(ctx, target_kind, target_id):
+            issues.append(
+                {
+                    "code": "unknown_evidence_target",
+                    "message": "The evidence target does not exist in this workspace",
+                }
+            )
+        return issues
+
+    if action == "associate_contract_with_solution":
+        if op.target_id is None or matching.find_registry(
+            ctx, op.target_id, {"solution_boundary"}
+        ) is None:
+            issues.append(
+                {"code": "unknown_solution", "message": "The Solution Boundary was not found"}
+            )
+            return issues
+        contract = matching.find_contract(ctx, _as_uuid(pv.get("integration_id")))
+        if contract is None:
+            issues.append(
+                {"code": "unknown_contract", "message": "The Contract is not active"}
+            )
+        if pv.get("role") not in {"owned", "participating", "dependency"}:
+            issues.append({"code": "invalid_role", "message": "Unsupported association role"})
+        return issues
+
+    if action == "create_solution_relationship":
+        source_id = _as_uuid(pv.get("source_object_id"))
+        target_id = _as_uuid(pv.get("target_object_id"))
+        if source_id is None or target_id is None:
+            issues.append(
+                {"code": "missing_endpoint", "message": "Both Solutions are required"}
+            )
+            return issues
+        if source_id == target_id:
+            issues.append(
+                {"code": "self_relationship", "message": "A Solution cannot relate to itself"}
+            )
+            return issues
+        for endpoint in (source_id, target_id):
+            if matching.find_registry(ctx, endpoint, {"solution_boundary"}) is None:
+                issues.append(
+                    {"code": "unknown_solution", "message": "A Solution Boundary was not found"}
+                )
+        if pv.get("relationship_type") not in SOLUTION_RELATIONSHIP_TYPES:
+            issues.append(
+                {"code": "invalid_relationship_type", "message": "Unsupported relationship type"}
+            )
+        return issues
+
+    return issues
+
+
+_FACT_VOCABULARIES: dict[str, tuple[str, ...]] = {
+    "lifecycle_stage": LIFECYCLE_STAGES,
+    "operational_status": OPERATIONAL_STATUSES,
+    "environment_scope": ENVIRONMENT_SCOPES,
+}
+
+# Evidence uses the closed target arc; the API speaks in target kinds.
+EVIDENCE_TARGET_MODELS: dict[str, type] = {
+    "architecture_object": ArchitectureObject,
+    "architecture_relationship": ArchitectureRelationship,
+    "integration": Integration,
+    "integration_dependency": IntegrationDependency,
+    "solution_member": SolutionMember,
+}
+
+SOLUTION_RELATIONSHIP_TYPES = (
+    "depends_on",
+    "uses",
+    "provides_to",
+    "replaces",
+    "transitions_to",
+    "shares_information_with",
+)
+
+
+def _evidence_target_available(ctx: HelperContext, target_kind: str, target_id: UUID) -> bool:
+    model = EVIDENCE_TARGET_MODELS.get(target_kind)
+    if model is None:
+        return False
+    return (
+        ctx.db.scalar(
+            select(model.id).where(model.id == target_id, model.tenant_id == ctx.tenant_id)
+        )
+        is not None
+    )
+
+
 def _duplicate_operations(operations: list[HelperChangeOperation]) -> set[str]:
     seen: dict[tuple, str] = {}
     duplicates: set[str] = set()
@@ -1425,6 +1631,25 @@ def _duplicate_operations(operations: list[HelperChangeOperation]) -> set[str]:
                 pv.get("phase"),
                 pv.get("scenario_ref"),
             )
+        elif op.domain_action in {
+            "set_lifecycle",
+            "set_operational_status",
+            "set_environment_scope",
+        }:
+            key = (op.domain_action, pv.get("kind"), str(op.target_id))
+        elif op.domain_action == "set_contract_mediator":
+            key = ("set_contract_mediator", str(op.target_id))
+        elif op.domain_action == "attach_evidence":
+            key = ("attach_evidence", str(pv.get("target_kind")), str(op.target_id))
+        elif op.domain_action == "associate_contract_with_solution":
+            key = ("associate_contract_with_solution", str(pv.get("integration_id")))
+        elif op.domain_action == "create_solution_relationship":
+            key = (
+                "create_solution_relationship",
+                pv.get("source_object_id"),
+                pv.get("target_object_id"),
+                pv.get("relationship_type"),
+            )
         else:
             continue
         if key in seen:
@@ -1459,7 +1684,11 @@ def validate_change_set(ctx: HelperContext, change_set: HelperChangeSet) -> Help
     by_id = {op.operation_id: op for op in operations}
 
     for op in operations:
-        if op.domain_action in DOMAIN_ACTIONS or op.domain_action in SLICE3_ACTIONS:
+        if (
+            op.domain_action in DOMAIN_ACTIONS
+            or op.domain_action in SLICE3_ACTIONS
+            or op.domain_action in SLICE7_ACTIONS
+        ):
             issues[op.operation_id].extend(_validate_domain_operation(ctx, op, by_temp, by_id))
         elif op.target_id is not None and not _target_exists(ctx, op):
             issues[op.operation_id].append(

@@ -106,6 +106,7 @@ export interface ProposalOperation {
   target_type: string;
   target_id: string | null;
   temporary_id: string | null;
+  before_value?: Record<string, unknown> | null;
   proposed_value: Record<string, unknown>;
   depends_on: string[];
   validation_status: string;

@@ -6,9 +6,15 @@ import IntegrationWorkspace from "./IntegrationWorkspace";
 import type { GraphDocument } from "./contractGraphTypes";
 import { CSV_COLUMNS, serializeCsv } from "./contractMappingCsv";
 
+// The mocked ReactFlow ignores its props, so the canvas wiring is captured here.
+const flowCanvasProps = vi.hoisted(() => ({ latest: null as Record<string, unknown> | null }));
+
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
-  return { ...actual, ReactFlow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  return { ...actual, ReactFlow: (props: Record<string, unknown>) => {
+    flowCanvasProps.latest = props;
+    return <div>{props.children as React.ReactNode}</div>;
+  },
     MiniMap: () => null, Background: () => null, Controls: () => null };
 });
 
@@ -64,6 +70,7 @@ beforeEach(() => {
   saved = initialContract();
   conflict = false;
   writes = [];
+  flowCanvasProps.latest = null;
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true, value: function (this: HTMLDialogElement) { this.setAttribute("open", ""); },
   });
@@ -139,7 +146,7 @@ describe("CSV editor draft and persistence integration", () => {
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Undo import" }));
     expect(screen.getByText("Saved · r1")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
   it("saves request mappings through the existing revision-aware API and preserves other graphs", async () => {
     const responseBefore = structuredClone(saved.response_graph);
@@ -234,5 +241,15 @@ describe("CSV editor draft and persistence integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Saved · r2");
     expect(saved.graph.edges).toHaveLength(1);
+  });
+});
+
+describe("contract canvas framing", () => {
+  it("centers the graph on load instead of leaving it at the origin", async () => {
+    await openEditor("Request");
+    await waitFor(() => expect(flowCanvasProps.latest).not.toBeNull());
+    expect(flowCanvasProps.latest?.fitView).toBe(true);
+    expect(flowCanvasProps.latest?.fitViewOptions)
+      .toEqual({ padding: 0.18, minZoom: 0.72, maxZoom: 1.05 });
   });
 });

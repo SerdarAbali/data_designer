@@ -104,12 +104,18 @@ export type ArchitectureStateRelationship = {
   display_metadata?: Record<string, unknown>;
 };
 
+export type BaselineStatus = "draft" | "locked";
+
 export type ArchitectureState = {
   id: string;
   workspace_id: string;
   name: string;
   state_type: ArchitectureStateType;
   description?: string | null;
+  /** The Current baseline lifecycle. Absent on Candidate and Target states. */
+  baseline_status?: BaselineStatus | null;
+  baseline_locked_at?: string | null;
+  baseline_locked_by?: string | null;
   nodes: ArchitectureStateNode[];
   relationships: ArchitectureStateRelationship[];
   created_at: string;

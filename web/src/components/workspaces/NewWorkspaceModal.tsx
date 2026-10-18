@@ -1,31 +1,21 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import {
   ARCHITECTURE_DISCIPLINES,
   type ArchitectureDiscipline,
 } from "../../architectureTypes";
+import {
+  ALL_DISCIPLINES,
+  DEMO_PRESETS,
+  demoPresetForDisciplines,
+  normalizeDisciplines,
+  presetForId,
+  WORKSPACE_PRESETS,
+  type DemoPreset,
+  type InitialArchitectureState,
+} from "../../workspace/disciplineScope";
 
-export type DemoPreset = "full" | "solution_integration" | "integration_only";
-
-const DEMO_PRESETS: { id: DemoPreset; label: string; description: string; disciplines: ArchitectureDiscipline[] }[] = [
-  {
-    id: "full",
-    label: "Full Architecture",
-    description: "Enterprise, Information, Solution and Integration.",
-    disciplines: ["enterprise", "information", "solution", "integration"],
-  },
-  {
-    id: "solution_integration",
-    label: "Solution + Integration",
-    description: "Solution designs and integration contracts only.",
-    disciplines: ["solution", "integration"],
-  },
-  {
-    id: "integration_only",
-    label: "Integration Only",
-    description: "Catalog schemas, contracts, mappings and tests only.",
-    disciplines: ["integration"],
-  },
-];
+export type { DemoPreset } from "../../workspace/disciplineScope";
 
 type NewWorkspaceModalProps = {
   isOpen: boolean;
@@ -35,16 +25,17 @@ type NewWorkspaceModalProps = {
     description: string,
     demoPreset: DemoPreset | null,
     disciplines: ArchitectureDiscipline[],
+    initialState: InitialArchitectureState,
   ) => Promise<void>;
   loading?: boolean;
 };
 
-const fieldStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: "8px",
-  border: "1px solid var(--color-border-strong)",
-  fontSize: "0.9rem",
-};
+function sameDisciplines(
+  a: readonly ArchitectureDiscipline[],
+  b: readonly ArchitectureDiscipline[],
+): boolean {
+  return a.length === b.length && a.every((item) => b.includes(item));
+}
 
 export default function NewWorkspaceModal({
   isOpen,
@@ -54,37 +45,54 @@ export default function NewWorkspaceModal({
 }: NewWorkspaceModalProps) {
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
-  const [isDemo, setIsDemo] = React.useState(false);
-  const [demoPreset, setDemoPreset] = React.useState<DemoPreset>("full");
   const [disciplines, setDisciplines] = React.useState<ArchitectureDiscipline[]>([
-    "enterprise",
-    "information",
-    "solution",
-    "integration",
+    ...ALL_DISCIPLINES,
   ]);
+  const [isDemo, setIsDemo] = React.useState(false);
+  const [demoPreset, setDemoPreset] = React.useState<DemoPreset | null>(null);
+  const [initialState, setInitialState] = React.useState<InitialArchitectureState>("current");
   const [error, setError] = React.useState("");
 
   if (!isOpen) return null;
 
-  function toggleDiscipline(d: ArchitectureDiscipline) {
-    if (disciplines.includes(d)) {
-      if (disciplines.length === 1) {
-        setError("At least one architecture discipline must be selected.");
-        return;
-      }
-      setError("");
-      setDisciplines(disciplines.filter((item) => item !== d));
-    } else {
-      setError("");
-      setDisciplines([...disciplines, d]);
+  const selectedPreset = WORKSPACE_PRESETS.find((preset) =>
+    sameDisciplines(preset.disciplines, disciplines));
+  const compatibleDemo = demoPresetForDisciplines(disciplines);
+
+  function choosePreset(presetId: string) {
+    const preset = presetForId(presetId);
+    if (!preset) return;
+    setError("");
+    setDisciplines([...preset.disciplines]);
+    if (isDemo) {
+      if (preset.demoPreset) setDemoPreset(preset.demoPreset);
+      else setIsDemo(false);
     }
   }
 
-  function chooseDemoPreset(preset: DemoPreset) {
+  function toggleDiscipline(discipline: ArchitectureDiscipline) {
+    const next = disciplines.includes(discipline)
+      ? disciplines.filter((item) => item !== discipline)
+      : normalizeDisciplines([...disciplines, discipline]);
+    if (next.length === 0) {
+      setError("At least one architecture discipline must be selected.");
+      return;
+    }
     setError("");
+    setDisciplines(next);
+    // A demo only fits the scope it was generated for.
+    if (isDemo && demoPresetForDisciplines(next) !== demoPreset) {
+      setIsDemo(false);
+      setDemoPreset(null);
+    }
+  }
+
+  function chooseDemo(preset: DemoPreset) {
+    setError("");
+    const option = DEMO_PRESETS.find((item) => item.id === preset);
+    if (option) setDisciplines([...option.disciplines]);
     setDemoPreset(preset);
-    const spec = DEMO_PRESETS.find((item) => item.id === preset);
-    if (spec) setDisciplines(spec.disciplines);
+    setIsDemo(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -99,21 +107,27 @@ export default function NewWorkspaceModal({
     }
     setError("");
     try {
-      await onCreate(name.trim(), description.trim(), isDemo ? demoPreset : null, disciplines);
+      await onCreate(
+        name.trim(),
+        description.trim(),
+        isDemo ? demoPreset : null,
+        normalizeDisciplines(disciplines),
+        initialState,
+      );
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create workspace");
     }
   }
 
-  return (
+  return createPortal(
     <div
       className="catalog-modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-labelledby="new-ws-title"
     >
-      <div className="catalog-modal" style={{ width: "min(100%, 580px)" }}>
+      <div className="catalog-modal new-workspace-modal">
         <header>
           <div>
             <p className="eyebrow">ARCHITECTURE WORKSPACE</p>
@@ -130,193 +144,189 @@ export default function NewWorkspaceModal({
           </button>
         </header>
 
-        <form
-          onSubmit={handleSubmit}
-          className="editor-form"
-          style={{ display: "grid", gap: "16px" }}
-        >
-          <label style={{ display: "grid", gap: "6px", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-ink)" }}>
-            Workspace Name
-            <input
-              type="text"
-              required
-              maxLength={120}
-              placeholder="e.g. Retail Architecture 2026, Core Platform, Sandbox"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={loading}
-              autoFocus
-              style={fieldStyle}
-            />
-          </label>
+        <form className="nw-form" onSubmit={handleSubmit}>
+          <div className="nw-body">
+            <label className="nw-field">
+              <span className="nw-field-label">Workspace Name</span>
+              <input
+                type="text"
+                required
+                maxLength={120}
+                placeholder="e.g. Retail Architecture 2026, Core Platform, Sandbox"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={loading}
+                autoFocus
+              />
+            </label>
 
-          <label style={{ display: "grid", gap: "6px", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-ink)" }}>
-            Description (Optional)
-            <input
-              type="text"
-              maxLength={500}
-              placeholder="Brief description of this environment or architecture model"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={loading}
-              style={fieldStyle}
-            />
-          </label>
+            <label className="nw-field">
+              <span className="nw-field-label">Description (Optional)</span>
+              <input
+                type="text"
+                maxLength={500}
+                placeholder="Brief description of this environment or architecture model"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                disabled={loading}
+              />
+            </label>
 
-          <div>
-            <p style={{ margin: "0 0 8px", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-ink)" }}>
-              Initial Content
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-              <div
-                role="button"
-                aria-pressed={!isDemo}
-                onClick={() => { setError(""); setIsDemo(false); }}
-                style={{
-                  padding: "12px",
-                  borderRadius: "8px",
-                  border: !isDemo ? "2px solid var(--discipline-integration)" : "1px solid var(--color-border)",
-                  background: !isDemo ? "var(--color-accent-soft)" : "var(--color-surface)",
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ fontWeight: 650, fontSize: "0.88rem", color: !isDemo ? "var(--color-accent)" : "var(--color-ink)", marginBottom: "4px" }}>
-                  Blank Workspace
-                </div>
-                <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>
-                  Start empty with no systems. A clean slate for new modelling.
-                </div>
+            <fieldset className="nw-fieldset">
+              <legend className="nw-field-label">Workspace Preset</legend>
+              <div className="nw-presets">
+                {WORKSPACE_PRESETS.map((preset) => {
+                  const active = selectedPreset?.id === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-pressed={active}
+                      disabled={loading}
+                      onClick={() => choosePreset(preset.id)}
+                      className={`nw-preset${active ? " active" : ""}`}
+                    >
+                      <span className="nw-preset-label">{preset.label}</span>
+                      <span className="nw-preset-desc">{preset.description}</span>
+                    </button>
+                  );
+                })}
               </div>
+            </fieldset>
 
-              <div
-                role="button"
-                aria-pressed={isDemo}
-                onClick={() => { setError(""); setIsDemo(true); chooseDemoPreset(demoPreset); }}
-                style={{
-                  padding: "12px",
-                  borderRadius: "8px",
-                  border: isDemo ? "2px solid var(--discipline-integration)" : "1px solid var(--color-border)",
-                  background: isDemo ? "var(--color-accent-soft)" : "var(--color-surface)",
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ fontWeight: 650, fontSize: "0.88rem", color: isDemo ? "var(--color-accent)" : "var(--color-ink)", marginBottom: "4px" }}>
-                  Demo Workspace
-                </div>
-                <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>
-                  Deterministic customer-onboarding demo for the selected scope.
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {isDemo && (
-            <div>
-              <p style={{ margin: "0 0 8px", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-ink)" }}>
-                Demo Scope
-              </p>
-              <div style={{ display: "grid", gap: "8px" }}>
-                {DEMO_PRESETS.map((preset) => {
-                  const active = demoPreset === preset.id;
+            <fieldset className="nw-fieldset">
+              <legend className="nw-field-label">Enabled Disciplines</legend>
+              <div className="nw-options">
+                {ARCHITECTURE_DISCIPLINES.map((d) => {
+                  const checked = disciplines.includes(d.id);
                   return (
                     <label
-                      key={preset.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "10px",
-                        padding: "8px 12px",
-                        borderRadius: "6px",
-                        border: active ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
-                        background: active ? "var(--color-accent-soft)" : "var(--color-surface)",
-                        cursor: "pointer",
-                      }}
+                      key={d.id}
+                      className={`nw-option${checked ? " active" : ""}`}
                     >
                       <input
-                        type="radio"
-                        name="demo-preset"
-                        checked={active}
-                        onChange={() => chooseDemoPreset(preset.id)}
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleDiscipline(d.id)}
                         disabled={loading}
-                        style={{ marginTop: "3px" }}
                       />
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: "0.85rem", color: active ? "var(--color-accent)" : "var(--color-ink)" }}>
-                          {preset.label}
-                        </div>
-                        <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>{preset.description}</div>
-                      </div>
+                      <span className="nw-option-body">
+                        <span className="nw-option-title">{d.label}</span>
+                        <span className="nw-option-desc">{d.description}</span>
+                      </span>
                     </label>
                   );
                 })}
               </div>
-            </div>
-          )}
+            </fieldset>
 
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-              <p style={{ margin: 0, fontSize: "0.85rem", fontWeight: 600, color: "var(--color-ink)" }}>
-                Architecture Disciplines
-              </p>
-              {!isDemo && (
-                <div style={{ display: "flex", gap: "6px" }}>
-                  <button type="button" className="quiet-button" style={{ fontSize: "0.75rem", padding: "2px 6px" }} onClick={() => setDisciplines(["enterprise", "information", "solution", "integration"])}>
-                    All 4
-                  </button>
-                  <button type="button" className="quiet-button" style={{ fontSize: "0.75rem", padding: "2px 6px" }} onClick={() => setDisciplines(["solution", "integration"])}>
-                    Solution
-                  </button>
-                  <button type="button" className="quiet-button" style={{ fontSize: "0.75rem", padding: "2px 6px" }} onClick={() => setDisciplines(["integration"])}>
-                    Integration Only
-                  </button>
+            <fieldset className="nw-fieldset">
+              <legend className="nw-field-label">Initial Architecture State</legend>
+              <div className="nw-options">
+                <label className="nw-option nw-option-plain">
+                  <input
+                    type="radio"
+                    name="initial-state"
+                    checked={initialState === "current" && !isDemo}
+                    disabled={loading || isDemo}
+                    onChange={() => setInitialState("current")}
+                  />
+                  <span className="nw-option-body">
+                    <span className="nw-option-title">Current baseline draft</span>
+                    <span className="nw-option-desc">
+                      Capture the existing architecture in an editable Current state, then lock it
+                      as the baseline.
+                    </span>
+                  </span>
+                </label>
+                <label className="nw-option nw-option-plain">
+                  <input
+                    type="radio"
+                    name="initial-state"
+                    checked={initialState === "candidate" && !isDemo}
+                    disabled={loading || isDemo}
+                    onChange={() => setInitialState("candidate")}
+                  />
+                  <span className="nw-option-body">
+                    <span className="nw-option-title">Candidate starter</span>
+                    <span className="nw-option-desc">
+                      Capture the existing architecture in an editable Current state while designing
+                      an editable Candidate alongside it.
+                    </span>
+                  </span>
+                </label>
+              </div>
+              {isDemo && (
+                <p className="nw-hint">
+                  Demo content defines its own Current and Candidate states.
+                </p>
+              )}
+            </fieldset>
+
+            <fieldset className="nw-fieldset">
+              <legend className="nw-field-label">Demo Content (Optional)</legend>
+              <label className="nw-option nw-option-plain">
+                <input
+                  type="checkbox"
+                  checked={isDemo}
+                  disabled={loading || (!isDemo && !compatibleDemo)}
+                  onChange={(e) => {
+                    setError("");
+                    if (!e.target.checked) {
+                      setIsDemo(false);
+                      setDemoPreset(null);
+                      return;
+                    }
+                    chooseDemo(compatibleDemo ?? DEMO_PRESETS[0].id);
+                  }}
+                />
+                <span className="nw-option-body">
+                  <span className="nw-option-title">
+                    Start with a deterministic demo
+                  </span>
+                </span>
+              </label>
+              {!isDemo && !compatibleDemo && (
+                <p className="nw-hint">
+                  Demo content is available for the Integration, Solution + Integration and Full
+                  Architecture presets.
+                </p>
+              )}
+              {isDemo && (
+                <div className="nw-options nw-options-nested">
+                  {DEMO_PRESETS.map((preset) => {
+                    const active = demoPreset === preset.id;
+                    return (
+                      <label
+                        key={preset.id}
+                        className={`nw-option${active ? " active" : ""}`}
+                      >
+                        <input
+                          type="radio"
+                          name="demo-preset"
+                          checked={active}
+                          onChange={() => chooseDemo(preset.id)}
+                          disabled={loading}
+                        />
+                        <span className="nw-option-body">
+                          <span className="nw-option-title">{preset.label}</span>
+                          <span className="nw-option-desc">{preset.description}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               )}
-            </div>
+            </fieldset>
 
-            <div style={{ display: "grid", gap: "8px" }}>
-              {ARCHITECTURE_DISCIPLINES.map((d) => {
-                const checked = disciplines.includes(d.id);
-                return (
-                  <label
-                    key={d.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: "10px",
-                      padding: "8px 12px",
-                      borderRadius: "6px",
-                      border: checked ? "1px solid var(--color-accent)" : "1px solid var(--color-border)",
-                      background: checked ? "var(--color-accent-soft)" : "var(--color-surface)",
-                      cursor: isDemo ? "not-allowed" : "pointer",
-                      opacity: isDemo && !checked ? 0.5 : 1,
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleDiscipline(d.id)}
-                      disabled={loading || isDemo}
-                      style={{ marginTop: "3px" }}
-                    />
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: "0.85rem", color: checked ? "var(--color-accent)" : "var(--color-ink)" }}>
-                        {d.label}
-                      </div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>{d.description}</div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
+            {error && (
+              <p className="error nw-error" role="alert">
+                {error}
+              </p>
+            )}
           </div>
 
-          {error && (
-            <p className="error" role="alert" style={{ margin: 0, fontSize: "0.85rem" }}>
-              {error}
-            </p>
-          )}
-
-          <div className="catalog-modal-actions" style={{ marginTop: "8px" }}>
+          <div className="nw-actions">
             <button type="button" className="secondary-button" onClick={onClose} disabled={loading}>
               Cancel
             </button>
@@ -326,6 +336,7 @@ export default function NewWorkspaceModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

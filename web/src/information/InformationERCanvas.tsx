@@ -224,6 +224,7 @@ export default function InformationERCanvas({
         nodesDraggable={editable}
         edgesReconnectable={editable}
         deleteKeyCode={null}
+        proOptions={{ hideAttribution: true }}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.2}

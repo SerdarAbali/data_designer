@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
+from app.architecture.evidence import assert_no_evidence
 from app.architecture.routes import get_accessible_workspace
 from app.architecture.schemas import (
     ApplicationSupportEntry,
@@ -57,6 +58,9 @@ from app.architecture.state_scope import (
 )
 from app.architecture.state_scope import (
     present_in_current as _present_in_current,
+)
+from app.architecture.state_scope import (
+    state_is_editable as _state_is_editable,
 )
 from app.auth.dependencies import (
     AuthenticatedUser,
@@ -344,7 +348,7 @@ def _build_model(
     return EnterpriseModelResponse(
         state_id=state.id,
         state_type=state.state_type,
-        editable=state.state_type != "current",
+        editable=_state_is_editable(state),
         applications=applications,
         links=links,
         **grouped,
@@ -367,13 +371,26 @@ def _set_node_overrides(
 
 
 def _purge_object(db: Session, workspace: Workspace, object_id: UUID) -> None:
-    for edge in db.scalars(
-        select(ArchitectureRelationship).where(
-            ArchitectureRelationship.tenant_id == workspace.tenant_id,
-            (ArchitectureRelationship.source_object_id == object_id)
-            | (ArchitectureRelationship.target_object_id == object_id),
+    edges = list(
+        db.scalars(
+            select(ArchitectureRelationship).where(
+                ArchitectureRelationship.tenant_id == workspace.tenant_id,
+                (ArchitectureRelationship.source_object_id == object_id)
+                | (ArchitectureRelationship.target_object_id == object_id),
+            )
         )
-    ):
+    )
+    # Evidence is never silently dropped: refuse the removal while it is still
+    # supported, so the caller can delete the evidence explicitly first.
+    assert_no_evidence(
+        db,
+        workspace.tenant_id,
+        [
+            ("architecture_object", object_id),
+            *(("architecture_relationship", edge.id) for edge in edges),
+        ],
+    )
+    for edge in edges:
         db.delete(edge)
     registry = db.get(ArchitectureObject, object_id)
     if registry is not None:

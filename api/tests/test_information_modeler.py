@@ -22,6 +22,7 @@ from app.models import (
     Tenant,
     User,
 )
+from tests.baseline_support import lock_baseline
 
 
 @pytest.fixture()
@@ -167,6 +168,7 @@ def test_information_modeler_entity_attribute_relationship_flow(client):
     assert updated.json()["cardinality"] == "many_to_many"
 
     # Current state is untouched by candidate work.
+    lock_baseline(test_client, workspace_id, current["id"], headers)
     current_model = test_client.get(
         f"/api/workspaces/{workspace_id}/information/model",
         params={"state_id": current["id"]},

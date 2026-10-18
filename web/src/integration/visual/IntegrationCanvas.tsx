@@ -89,6 +89,7 @@ export default function IntegrationCanvas<NodeType extends Node, EdgeType extend
         nodesConnectable={false}
         edgesFocusable={false}
         deleteKeyCode={null}
+        proOptions={{ hideAttribution: true }}
         fitView={!defaultViewport}
         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.2}

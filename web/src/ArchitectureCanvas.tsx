@@ -27,6 +27,7 @@ import {
 } from "./components/architecture/architectureRouting";
 import { type NavigationGuard } from "./contextSaveQueue";
 import StudioMenu from "./components/architecture/StudioMenu";
+import DisciplineOnboarding from "./components/architecture/DisciplineOnboarding";
 import ArchitectureObjectDialog, {
   type ArchitectureObjectDraft,
 } from "./components/architecture/ArchitectureObjectDialog";
@@ -71,7 +72,13 @@ import {
   type BoundaryGeometry,
   projectStateNodes,
 } from "./architectureCanvasModel";
+import LockBaselineDialog from "./workbench/LockBaselineDialog";
+import { baselineLockSummary, baselineStatusLabel } from "./workbench/currentBaseline";
+import { isDraftCurrentBaseline, isLockedCurrentBaseline } from "./architectureCanvasModel";
 import type { ScenarioPhase } from "./scenarioModel";
+import {
+  defaultDiscipline,
+} from "./workspace/disciplineScope";
 
 type TestStatus = "passing" | "failing" | "untested" | "error";
 
@@ -169,9 +176,9 @@ function readStoredDiscipline(
     const matching = enabled.find((discipline) => discipline === stored);
     if (matching) return matching;
   } catch {
-    return enabled[0] ?? "integration";
+    return defaultDiscipline(enabled);
   }
-  return enabled[0] ?? "integration";
+  return defaultDiscipline(enabled);
 }
 
 function uniqueCandidateName(states: ArchitectureState[]): string {
@@ -247,6 +254,8 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
     mutateActive,
   } = useArchitectureModel({ workspaceId, registerNavigationGuard });
 
+  const [lockBaselineOpen, setLockBaselineOpen] = React.useState(false);
+
   // Reset canvas-only selection when the workspace changes; the shared model
   // hook resets its own data as part of loading.
   React.useEffect(() => {
@@ -313,7 +322,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
       setNodes([]);
       return;
     }
-    const applyOverrides = activeState.state_type !== "current";
+    const applyOverrides = editable;
     const highlight =
       highlightObjectIds && highlightObjectIds.length > 0 ? new Set(highlightObjectIds) : null;
     setNodes(() =>
@@ -487,6 +496,8 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
         data: {
           relationship,
           obstacles,
+          sourceRect,
+          targetRect,
           laneIndex: lane.laneIndex,
           laneCount: lane.laneCount,
           sourceId: relationship.sourceOccurrenceId,
@@ -763,23 +774,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
             });
           }}
         />}
-        addMenu={workbenchMode ? null : <StudioMenu label="+ Add Object" disabled={!editable || loading} className="studio-add-menu">
-          <p className="studio-menu-caption">{activeDiscipline} objects</p>
-          {paletteKinds.map((kind) => <button key={kind} type="button" onClick={() => setObjectKindToAdd(kind)}>{paletteLabels[kind]}</button>)}
-          <button type="button" onClick={() => setAddOpen(true)}>Existing system</button>
-          {activeDiscipline === "integration" && <>
-            <button type="button" onClick={() => {
-              setPanMode(false);
-              setError("");
-              setRelationshipType("Uses");
-            }}>Integration relationship <small>Drag between object handles</small></button>
-            <button type="button" onClick={() => {
-              setLinkContractId(integrations[0]?.id ?? "");
-              setLinkContractOpen(true);
-            }}>Existing contract</button>
-          </>}
-        </StudioMenu>}
-        options={<StudioMenu label="View options">
+        options={<StudioMenu label={integrationMode ? "View options" : "State actions"}>
           {integrationMode && (
             <button type="button" onClick={() => setIntegrationOverview((value) => !value)}>
               {integrationOverview ? "Integration designer" : "Architecture canvas"}
@@ -790,6 +785,57 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
         </StudioMenu>}
         saveStatus={saveStatus}
       />
+      {activeState?.state_type === "current" ? (
+        <div
+          className={
+            isLockedCurrentBaseline(activeState)
+              ? "current-baseline-banner is-locked"
+              : "current-baseline-banner is-draft"
+          }
+          role="status"
+          data-testid="current-baseline-banner"
+          data-baseline-status={activeState.baseline_status ?? "locked"}
+        >
+          <div>
+            <strong data-testid="current-baseline-label">{baselineStatusLabel(activeState)}</strong>
+            {isDraftCurrentBaseline(activeState) ? (
+              <span>
+                Capture the existing architecture here, then lock it. Locking makes Current
+                read-only; it is not an approval.
+              </span>
+            ) : (
+              <span data-testid="current-baseline-lock-summary">
+                {baselineLockSummary(activeState) ??
+                  "This baseline has been locked, so Current is read-only."}
+              </span>
+            )}
+          </div>
+          {isDraftCurrentBaseline(activeState) ? (
+            <button
+              type="button"
+              className="btn btn--secondary"
+              data-testid="lock-baseline-open"
+              onClick={() => setLockBaselineOpen(true)}
+            >
+              Lock Current baseline
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {lockBaselineOpen && activeState ? (
+        <LockBaselineDialog
+          workspaceId={workspaceId}
+          state={activeState}
+          onLocked={(next) => {
+            adoptState(next);
+            setLockBaselineOpen(false);
+            setSelectedEdgeId(null);
+            setSelectedOccurrenceId(null);
+          }}
+          onClose={() => setLockBaselineOpen(false)}
+        />
+      ) : null}
+      <DisciplineOnboarding workspaceId={workspaceId} discipline={activeDiscipline} />
       {error && <div className="studio-canvas-error" role="alert">
         <span>{error}</span>
         {dirtyStates.current.size > 0 && <button type="button" onClick={() => {
@@ -847,6 +893,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
           onReloadStates={() => void load()}
           onOpenCatalog={onOpenCatalog}
           onNavigateTrace={handleNavigateTrace}
+          onOpenIntegration={onOpenIntegration}
         />
       ) : loading && states.length === 0 ? (
         <div className="landscape-empty" role="status">Loading architecture states…</div>
@@ -917,6 +964,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
               edgesFocusable
               deleteKeyCode={null}
               fitView
+              proOptions={{ hideAttribution: true }}
               fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
               minZoom={0.2}
               maxZoom={1.8}
@@ -998,6 +1046,7 @@ function ArchitectureCanvasInner({ workspace, onOpenIntegration, onAddIntegratio
               onRemove={editable ? () => handleRemoveOccurrence(selectedOccurrence.occurrence_id) : undefined}
               workspaceId={workspaceId}
               stateId={activeState?.id ?? null}
+              overrides={editable ? selectedOccurrence.candidate_overrides : undefined}
               onNavigateTrace={handleNavigateTrace}
               onOpenCatalog={
                 workspace.disciplines.some((discipline) =>

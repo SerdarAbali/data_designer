@@ -1,5 +1,6 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
+import type { FlowSide } from "../../components/architecture/architectureRouting";
 import type { SolutionComponent, SolutionInterface } from "../solutionModel";
 import { interfaceHandle } from "../solutionCanvasModel";
 
@@ -8,6 +9,8 @@ export type SolutionComponentNodeData = {
   editable: boolean;
   selectedInterfaceId: string | null;
   selectedOperationId: string | null;
+  /** Side each interface port sits on, chosen so connectors run straight across. */
+  portSides?: Record<string, FlowSide>;
   onSelectInterface: (interfaceId: string) => void;
   onSelectOperation: (interfaceId: string, operationId: string) => void;
 };
@@ -17,6 +20,7 @@ export type SolutionComponentFlowNode = Node<SolutionComponentNodeData, "solutio
 function InterfacePort({
   ui,
   side,
+  portSide,
   selectedInterfaceId,
   selectedOperationId,
   onSelectInterface,
@@ -24,6 +28,7 @@ function InterfacePort({
 }: {
   ui: SolutionInterface;
   side: "provided" | "required";
+  portSide: FlowSide;
   selectedInterfaceId: string | null;
   selectedOperationId: string | null;
   onSelectInterface: (interfaceId: string) => void;
@@ -34,7 +39,7 @@ function InterfacePort({
       <Handle
         type={side === "required" ? "source" : "target"}
         id={interfaceHandle(ui.object_id)}
-        position={side === "required" ? Position.Left : Position.Right}
+        position={portSide === "left" ? Position.Left : Position.Right}
         className={`solution-port-handle solution-port-handle-${side}`}
       />
       <button
@@ -75,7 +80,7 @@ function InterfacePort({
 }
 
 export default function SolutionComponentNode({ data, selected }: NodeProps<SolutionComponentFlowNode>) {
-  const { component, editable, selectedInterfaceId, selectedOperationId } = data;
+  const { component, editable, selectedInterfaceId, selectedOperationId, portSides } = data;
   return (
     <article
       className={`solution-component-node${selected ? " selected" : ""}`}
@@ -109,6 +114,7 @@ export default function SolutionComponentNode({ data, selected }: NodeProps<Solu
             key={ui.object_id}
             ui={ui}
             side={ui.direction}
+            portSide={portSides?.[ui.object_id] ?? (ui.direction === "required" ? "left" : "right")}
             selectedInterfaceId={selectedInterfaceId}
             selectedOperationId={selectedOperationId}
             onSelectInterface={data.onSelectInterface}

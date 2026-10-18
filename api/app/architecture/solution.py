@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.architecture.evidence import assert_no_evidence
 from app.architecture.routes import get_accessible_workspace
 from app.architecture.schemas import (
     ArchitectureStateNode,
@@ -37,6 +38,7 @@ from app.architecture.schemas import (
     SolutionTrustBoundaryUpdate,
     SolutionUpdate,
 )
+from app.architecture.solution_integration import assert_no_solution_integration
 from app.architecture.state_scope import (
     assert_writable as _assert_writable,
 )
@@ -57,6 +59,9 @@ from app.architecture.state_scope import (
 )
 from app.architecture.state_scope import (
     set_member_override as _set_member_override,
+)
+from app.architecture.state_scope import (
+    state_is_editable as _state_is_editable,
 )
 from app.architecture.state_scope import (
     state_members as _state_members,
@@ -574,7 +579,7 @@ def _build_design(
     return SolutionDesignResponse(
         state_id=state.id,
         state_type=state.state_type,
-        editable=state.state_type != "current",
+        editable=_state_is_editable(state),
         solution=solution_context,
         components=components,
         repositories=repositories,
@@ -867,6 +872,20 @@ def remove_solution_member(
     boundary = _get_boundary(db, workspace, solution_object_id)
     state = _get_state(db, workspace, state_id)
     _assert_writable(state)
+    assert_no_evidence(
+        db,
+        workspace.tenant_id,
+        [
+            ("solution_member", member.id)
+            for member in db.scalars(
+                select(SolutionMember).where(
+                    SolutionMember.solution_object_id == solution_object_id,
+                    SolutionMember.system_id == system_id,
+                    SolutionMember.created_in_state_id == state.id,
+                )
+            )
+        ],
+    )
     db.execute(
         delete(SolutionMember).where(
             SolutionMember.solution_object_id == solution_object_id,
@@ -1066,13 +1085,28 @@ def delete_solution_component(
 
 
 def _purge_object(db: Session, workspace: Workspace, object_id: UUID) -> None:
-    for edge in db.scalars(
-        select(ArchitectureRelationship).where(
-            ArchitectureRelationship.tenant_id == workspace.tenant_id,
-            (ArchitectureRelationship.source_object_id == object_id)
-            | (ArchitectureRelationship.target_object_id == object_id),
+    edges = list(
+        db.scalars(
+            select(ArchitectureRelationship).where(
+                ArchitectureRelationship.tenant_id == workspace.tenant_id,
+                (ArchitectureRelationship.source_object_id == object_id)
+                | (ArchitectureRelationship.target_object_id == object_id),
+            )
         )
-    ):
+    )
+    # Evidence is never silently dropped: refuse the removal while it is still
+    # supported, so the caller can delete the evidence explicitly first.
+    assert_no_evidence(
+        db,
+        workspace.tenant_id,
+        [
+            ("architecture_object", object_id),
+            *(("architecture_relationship", edge.id) for edge in edges),
+        ],
+    )
+    # A Solution Boundary that still owns Contracts cannot be removed silently.
+    assert_no_solution_integration(db, workspace.tenant_id, solution_object_id=object_id)
+    for edge in edges:
         db.delete(edge)
     db.execute(
         delete(ArchitectureStateMember).where(ArchitectureStateMember.object_id == object_id)

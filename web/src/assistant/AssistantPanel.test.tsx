@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantLauncher, AssistantPanel } from "./AssistantPanel";
@@ -115,7 +115,7 @@ describe("AssistantPanel", () => {
     );
     renderPanel({ workspaceId: "ws-1" });
     await waitFor(() => {
-      expect(screen.getByText(/disabled for this workspace/i)).toBeTruthy();
+      expect(screen.getAllByText(/disabled for this workspace/i).length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -132,12 +132,44 @@ describe("AssistantPanel", () => {
     await waitFor(() => {
       expect(screen.getByText(/Ready — read-only architecture assistant/i)).toBeTruthy();
     });
-    expect(screen.getByRole("button", { name: "New" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "New conversation" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("places Delete conversation and Settings under More menu", () => {
+    renderPanel({ workspaceId: "ws-1" });
+    // New conversation is prominent; Delete is under More
+    expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /delete conversation/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More assistant actions" }));
+    expect(screen.getByRole("button", { name: "Delete conversation" })).toBeTruthy();
   });
 
   it("is hidden when closed", () => {
     renderPanel({ open: false });
     const panel = screen.getByTestId("assistant-panel");
     expect(panel.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("groups workspace context into a collapsible block", () => {
+    const { container } = renderPanel({ workspaceId: "ws-1" });
+    const context = container.querySelector(".assistant-context") as HTMLDetailsElement;
+    expect(context).toBeTruthy();
+    expect(context.open).toBe(true);
+    expect(screen.getByText(/Context · Demo/)).toBeTruthy();
+  });
+
+  it("labels the composer and keeps the message input reachable", () => {
+    renderPanel();
+    expect(screen.getByLabelText("Message")).toBeTruthy();
+    expect(screen.getByLabelText("Message the assistant")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+
+  it("uses the shared side-panel contract", () => {
+    const { container } = renderPanel();
+    const panel = container.querySelector(".assistant-panel") as HTMLElement;
+    expect(panel.classList.contains("side-panel")).toBe(true);
+    expect(container.querySelector(".side-panel-header")).toBeTruthy();
+    expect(container.querySelector(".assistant-panel-scroll")).toBeTruthy();
   });
 });

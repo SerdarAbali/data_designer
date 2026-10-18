@@ -119,16 +119,87 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof ProposalPane
   );
 }
 
+describe("ProposalPanel refinement previews", () => {
+  it("renders a readable preview line for a refinement operation", async () => {
+    stubRouter({
+      get: changeSet({
+        helper_name: "propose_contract_mediator",
+        status: "validated",
+        unresolved_details: [],
+        validation_summary: { ready_for_approval: true },
+        operations: [
+          {
+            operation_id: "op-1",
+            ordinal: 0,
+            domain_action: "set_contract_mediator",
+            target_type: "contract",
+            target_id: "44444444-4444-4444-4444-444444444444",
+            temporary_id: null,
+            before_value: { mediator_system_id: null, mediator_responsibility: null },
+            proposed_value: {
+              kind: "contract",
+              contract_name: "Onboarding",
+              mediator_system_id: "55555555-5555-5555-5555-555555555555",
+              mediator_system_name: "FRENDS",
+            },
+            depends_on: [],
+            validation_status: "valid",
+            validation_issues: [],
+            resolution_state: "active",
+            explanation: null,
+          },
+        ],
+      }),
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("operation-preview")).toBeTruthy());
+    const line = screen.getByTestId("operation-preview").textContent ?? "";
+    expect(line).toContain("Mediator");
+    expect(line).toContain("FRENDS");
+    expect(line).toContain("None →");
+  });
+
+  it("shows validation issues for a rejected refinement operation", async () => {
+    stubRouter({
+      get: changeSet({
+        helper_name: "propose_evidence",
+        status: "validation_failed",
+        unresolved_details: [],
+        operations: [
+          {
+            operation_id: "op-1",
+            ordinal: 0,
+            domain_action: "attach_evidence",
+            target_type: "evidence",
+            target_id: null,
+            temporary_id: null,
+            proposed_value: { target_kind: "integration" },
+            depends_on: [],
+            validation_status: "invalid",
+            validation_issues: [{ code: "unknown_evidence_target", message: "Not found" }],
+            resolution_state: "active",
+            explanation: null,
+          },
+        ],
+      }),
+    });
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByText("unknown_evidence_target")).toBeTruthy(),
+    );
+  });
+});
+
 describe("ProposalPanel lifecycle", () => {
   it("shows Needs decisions and disables Approve until validated", async () => {
     stubRouter({ get: changeSet() });
     renderPanel();
     await waitFor(() => expect(screen.getByText(/Add a Customer information entity/)).toBeTruthy());
-    expect(screen.getByText("Needs decisions")).toBeTruthy();
-    expect(screen.getByTestId("approve-button").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByTestId("apply-button").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByTestId("undo-button").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Validate" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("Decisions required")).toBeTruthy();
+    expect(screen.queryByTestId("approve-button")).toBeNull();
+    expect(screen.queryByTestId("apply-button")).toBeNull();
+    expect(screen.queryByTestId("undo-button")).toBeNull();
+    expect(screen.getByRole("button", { name: "Resolve decisions" }).hasAttribute("disabled")).toBe(false);
   });
 
   it("enables Approve when validated and ready, then applies via the helper API", async () => {
@@ -169,7 +240,7 @@ describe("ProposalPanel lifecycle", () => {
     const onApplied = vi.fn();
     renderPanel({ onApplied, onClearHighlights: vi.fn() });
 
-    await waitFor(() => expect(screen.getByText("Ready for approval")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Ready for review")).toBeTruthy());
     expect(screen.getByTestId("approve-button").hasAttribute("disabled")).toBe(false);
 
     fireEvent.click(screen.getByTestId("approve-button"));
@@ -263,5 +334,40 @@ describe("ProposalPanel lifecycle", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => expect(screen.getByTestId("proposal-error")).toBeTruthy());
     expect(screen.queryByTestId("apply-results")).toBeNull();
+  });
+
+  it("summarizes key facts and collapses technical sections by default", async () => {
+    stubRouter({
+      get: changeSet({
+        status: "validated",
+        unresolved_details: [],
+        validation_summary: { ready_for_approval: true, valid: 1 },
+        validated_at: "2026-01-01T00:00:00Z",
+      }),
+    });
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("proposal-summary")).toBeTruthy());
+    const summary = screen.getByTestId("proposal-summary");
+    expect(summary.textContent).toContain("Target state");
+    expect(summary.textContent).toContain("Reused");
+    expect(summary.textContent).toContain("Proposed");
+    expect(summary.textContent).toContain("Decisions");
+    expect(summary.textContent).toContain("Readiness");
+    const lifecycle = screen.getByTestId("proposal-lifecycle");
+    expect(lifecycle.getAttribute("data-tone")).toBe("success");
+    const operations = screen.getByTestId("proposal-operations");
+    const operationsSection = operations.closest("details") as HTMLDetailsElement;
+    expect(operationsSection.open).toBe(false);
+  });
+
+  it("opens required decisions by default while keeping operations collapsed", async () => {
+    stubRouter({ get: changeSet() });
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("proposal-decisions")).toBeTruthy());
+    const decisionsSection = screen.getByTestId("proposal-decisions").closest("details") as HTMLDetailsElement;
+    expect(decisionsSection.open).toBe(true);
+    const operationsSection = screen.getByTestId("proposal-operations").closest("details") as HTMLDetailsElement;
+    expect(operationsSection.open).toBe(false);
+    expect(screen.getByTestId("proposal-lifecycle").getAttribute("data-tone")).toBe("draft");
   });
 });

@@ -7,7 +7,9 @@ import {
 
 import {
   buildRoute,
-  labelPoint,
+  estimateLabelSize,
+  labelAnchor,
+  labelObstacles,
   roundedOrthogonalPath,
   toFlowSide,
   type Rect,
@@ -18,6 +20,12 @@ export type SolutionEdgeData = {
   label: string;
   sourceOffset?: { x: number; y: number };
   targetOffset?: { x: number; y: number };
+  /** Dimmed while another connection on the canvas is being traced. */
+  dimmed?: boolean;
+  /** The connection the pointer is on: drawn heavier so it reads as the path. */
+  emphasized?: boolean;
+  /** Corridor lane, so connectors sharing a corridor do not overlap. */
+  laneShift?: number;
   /** Node rectangles the connector routes around (injected by the canvas shell). */
   obstacles?: Rect[];
   sourceRect?: Rect;
@@ -57,10 +65,17 @@ export default function SolutionEdge({
     0,
     undefined,
     { source: data?.sourceRect, target: data?.targetRect },
+    data?.laneShift ?? 0,
   );
   const path = roundedOrthogonalPath(points);
-  const anchor = labelPoint(points);
+  const label = data?.label ?? "";
+  const anchor = labelAnchor(
+    points,
+    labelObstacles(data?.obstacles, data?.sourceRect, data?.targetRect),
+    estimateLabelSize(label),
+  );
   const color = KIND_COLORS[data?.kind ?? ""] ?? "var(--color-border-strong)";
+  const emphasized = selected || data?.emphasized === true;
   return (
     <>
       <BaseEdge
@@ -69,15 +84,18 @@ export default function SolutionEdge({
         markerEnd={markerEnd}
         style={{
           stroke: color,
-          strokeWidth: selected ? 2.4 : 1.5,
+          strokeWidth: emphasized ? 2.4 : 1.5,
           strokeDasharray: data?.kind === "external" || data?.kind === "relationship" ? "5 4" : undefined,
+          opacity: data?.dimmed ? 0.14 : 1,
         }}
         interactionWidth={18}
       />
       {data?.label && (
         <EdgeLabelRenderer>
           <div
-            className={`solution-edge-label kind-${data.kind}${selected ? " selected" : ""}`}
+            className={`solution-edge-label kind-${data.kind}${emphasized ? " selected" : ""}${
+              data?.dimmed ? " dimmed" : ""
+            }`}
             style={{ transform: `translate(-50%, -50%) translate(${anchor.x}px, ${anchor.y}px)` }}
           >
             {data.label}

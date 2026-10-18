@@ -1,9 +1,11 @@
 import { MarkerType } from "@xyflow/react";
 import { useMemo, useState } from "react";
 
+import { useHoverFocus } from "../../components/architecture/useHoverFocus";
 import type { InformationLineage, InformationLineageNode } from "../informationModel";
 import {
   LINEAGE_KIND_LABELS,
+  assignProjectionLanes,
   filterLineage,
   lineageLayout,
   lineageNeighborhood,
@@ -54,6 +56,15 @@ export default function InformationLineageView({
         : null,
     [highlight, selectedNodeId, lineage, direction],
   );
+  // Hovering a node or a link isolates that connection so a dense graph can be
+  // read without moving anything. Hover intent (see `useHoverFocus`) keeps
+  // sweeping across a bundle from flashing the whole canvas.
+  const focusableEdges = useMemo(
+    () => filtered.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+    [filtered.edges],
+  );
+  const hover = useHoverFocus(focusableEdges);
+  const focus = hover.focus;
 
   const unrealized = useMemo(() => {
     const realized = new Set(
@@ -81,25 +92,34 @@ export default function InformationLineageView({
           detail: node.detail,
           meta: node.system_name ? `System: ${node.system_name}` : null,
           gap: unrealized.has(node.id),
-          dimmed: neighborhood ? !neighborhood.has(node.id) : false,
+          dimmed:
+            (neighborhood ? !neighborhood.has(node.id) : false)
+            || (focus ? !focus.nodes.has(node.id) : false),
           tone: LINEAGE_TONES[node.kind] ?? "catalog",
         },
       })),
-    [filtered.nodes, positions, selectedNodeId, unrealized, neighborhood],
+    [filtered.nodes, positions, selectedNodeId, unrealized, neighborhood, focus],
   );
 
-  const edges = useMemo<ProjectionFlowEdge[]>(
-    () =>
-      filtered.edges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: "informationProjectionEdge" as const,
-        data: { relation: edge.relation },
-        markerEnd: { type: MarkerType.ArrowClosed },
-      })),
-    [filtered.edges],
-  );
+  const edges = useMemo<ProjectionFlowEdge[]>(() => {
+    const lanes = assignProjectionLanes(
+      positions,
+      filtered.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+    );
+    return filtered.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: "informationProjectionEdge" as const,
+      data: {
+        relation: edge.relation,
+        laneShift: lanes.get(edge.id) ?? 0,
+        emphasized: hover.target.edge === edge.id,
+        dimmed: focus ? !focus.edges.has(edge.id) : false,
+      },
+      markerEnd: { type: MarkerType.ArrowClosed },
+    }));
+  }, [filtered.edges, positions, focus, hover.target.edge]);
 
   return (
     <div className="information-lineage-view">
@@ -110,6 +130,10 @@ export default function InformationLineageView({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={(node) => onSelectNode(lineage.nodes.find((item) => item.id === node.id) ?? null)}
+        onNodeMouseEnter={hover.onNodeEnter}
+        onNodeMouseLeave={hover.onLeave}
+        onEdgeMouseEnter={hover.onEdgeEnter}
+        onEdgeMouseLeave={hover.onLeave}
         onPaneClick={() => onSelectNode(null)}
         toolbar={
           <>

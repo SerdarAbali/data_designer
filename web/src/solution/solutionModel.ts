@@ -126,6 +126,79 @@ export type SolutionSummary = {
   member_count: number;
 };
 
+// --- Solution Boundary <-> Contract association ------------------------------
+
+export type SolutionContractRole = "owned" | "participating" | "dependency";
+
+export const SOLUTION_CONTRACT_ROLES: SolutionContractRole[] = [
+  "owned",
+  "participating",
+  "dependency",
+];
+
+export const SOLUTION_CONTRACT_ROLE_LABELS: Record<SolutionContractRole, string> = {
+  owned: "Owned by this solution",
+  participating: "Participating",
+  dependency: "Dependency",
+};
+
+export type SolutionContractEndpoint = {
+  system_id: string;
+  system_name: string;
+  object_id: string;
+  object_name: string;
+  system_kind?: string | null;
+  is_runtime?: boolean;
+};
+
+export type SolutionContractMediator = {
+  system_id: string;
+  system_name: string;
+  is_runtime?: boolean;
+  responsibility?: string | null;
+  explicit?: boolean;
+};
+
+export type SolutionContractFact = {
+  value: string | null;
+  canonical: string | null;
+  override: string | null;
+  overridden: boolean;
+};
+
+/** The bounded Contract projection the Solution inspector may display. */
+export type SolutionContractSummary = {
+  id: string;
+  name: string;
+  interaction_type: string;
+  implementation_status: string;
+  source: SolutionContractEndpoint;
+  target: SolutionContractEndpoint;
+  mediator: SolutionContractMediator | null;
+  explicit_mediator: boolean;
+  mediated: boolean;
+  mediation_source: "explicit" | "legacy_endpoint_heuristic" | "none";
+  evidence_count: number;
+  lifecycle_stage: SolutionContractFact;
+  operational_status: SolutionContractFact;
+  environment_scope: SolutionContractFact;
+};
+
+export type SolutionIntegration = {
+  id: string;
+  tenant_id: string;
+  solution_object_id: string;
+  integration_id: string;
+  role: SolutionContractRole;
+  description: string | null;
+  created_in_state_id: string | null;
+  state_applicability: "canonical" | "state";
+  state_name: string | null;
+  created_at: string;
+  updated_at: string;
+  contract: SolutionContractSummary;
+};
+
 const base = (workspaceId: string) => `/api/workspaces/${workspaceId}/solution`;
 
 async function run<T>(action: string, task: () => Promise<T>): Promise<T> {
@@ -561,6 +634,263 @@ export function deleteTrustBoundary(
 ): Promise<SolutionDesign> {
   return run("delete trust boundary", () =>
     api<SolutionDesign>(`${base(workspaceId)}/trust-boundaries/${trustId}?state_id=${stateId}`, {
+      method: "DELETE",
+    }),
+  );
+}
+
+// --- Solution Boundary <-> Contract associations ------------------------------
+
+function contractBase(workspaceId: string, solutionId: string): string {
+  return `${base(workspaceId)}/solutions/${solutionId}/contracts`;
+}
+
+export function listSolutionContracts(
+  workspaceId: string,
+  solutionId: string,
+  stateId: string,
+): Promise<SolutionIntegration[]> {
+  return run("list solution contracts", () =>
+    api<SolutionIntegration[]>(`${contractBase(workspaceId, solutionId)}?state_id=${stateId}`),
+  );
+}
+
+export function createSolutionContract(
+  workspaceId: string,
+  solutionId: string,
+  body: {
+    state_id: string;
+    integration_id: string;
+    role: SolutionContractRole;
+    description?: string | null;
+  },
+): Promise<SolutionIntegration> {
+  return run("associate contract", () =>
+    api<SolutionIntegration>(contractBase(workspaceId, solutionId), {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export function updateSolutionContract(
+  workspaceId: string,
+  solutionId: string,
+  associationId: string,
+  patch: { role?: SolutionContractRole; description?: string | null },
+): Promise<SolutionIntegration> {
+  return run("update contract association", () =>
+    api<SolutionIntegration>(`${contractBase(workspaceId, solutionId)}/${associationId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export function deleteSolutionContract(
+  workspaceId: string,
+  solutionId: string,
+  associationId: string,
+): Promise<void> {
+  return run("remove contract association", () =>
+    api<void>(`${contractBase(workspaceId, solutionId)}/${associationId}`, { method: "DELETE" }),
+  );
+}
+
+export type AssociableContract = { id: string; name: string };
+
+/**
+ * Contracts that can be associated with a solution. The bounded integration list
+ * is used rather than the full Integration Landscape, so the Solution workbench
+ * never depends on the Integration discipline being enabled.
+ */
+export function listAssociableContracts(workspaceId: string): Promise<AssociableContract[]> {
+  return run("list associable contracts", async () => {
+    const rows = await api<{ id: string; name: string }[]>(
+      `/api/integrations?limit=500&offset=0`,
+    );
+    return rows
+      .map((row) => ({ id: row.id, name: row.name }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  });
+}
+
+// --- Solution Landscape -------------------------------------------------------
+
+export type SolutionRelationshipType =
+  | "depends_on"
+  | "uses"
+  | "provides_to"
+  | "replaces"
+  | "transitions_to"
+  | "shares_information_with";
+
+export const SOLUTION_RELATIONSHIP_TYPES: SolutionRelationshipType[] = [
+  "depends_on",
+  "uses",
+  "provides_to",
+  "replaces",
+  "transitions_to",
+  "shares_information_with",
+];
+
+export const SOLUTION_RELATIONSHIP_LABELS: Record<SolutionRelationshipType, string> = {
+  depends_on: "Depends on",
+  uses: "Uses",
+  provides_to: "Provides to",
+  replaces: "Replaces",
+  transitions_to: "Transitions to",
+  shares_information_with: "Shares information with",
+};
+
+/** Stored in one canonical direction, presented symmetrically. */
+export const SYMMETRIC_SOLUTION_RELATIONSHIPS: SolutionRelationshipType[] = [
+  "shares_information_with",
+];
+
+export type SolutionLandscapeSystem = {
+  system_id: string;
+  name: string;
+  kind: string;
+  external: boolean;
+};
+
+export type SolutionLandscapeContractCounts = {
+  owned: number;
+  participating: number;
+  dependency: number;
+  total: number;
+};
+
+export type SolutionLandscapeContractAssociation = {
+  association_id: string;
+  role: SolutionContractRole;
+  description: string | null;
+  state_applicability: "canonical" | "state";
+  state_name: string | null;
+  contract_id: string;
+  contract_name: string | null;
+  available: boolean;
+  implementation_status: string | null;
+  lifecycle_stage: SolutionContractFact;
+  operational_status: SolutionContractFact;
+  environment_scope: SolutionContractFact;
+  evidence_count: number;
+};
+
+export type SolutionLandscapeWarning = {
+  code: string;
+  message: string;
+  solution_object_id: string | null;
+  relationship_id: string | null;
+  association_id: string | null;
+  integration_id: string | null;
+};
+
+export type SolutionLandscapeNode = {
+  solution_object_id: string;
+  occurrence_id: string | null;
+  name: string;
+  description: string | null;
+  owner: string | null;
+  lifecycle_stage: string | null;
+  operational_status: string | null;
+  component_count: number;
+  member_count: number;
+  external_system_count: number;
+  members: SolutionLandscapeSystem[];
+  external_systems: SolutionLandscapeSystem[];
+  contract_counts: SolutionLandscapeContractCounts;
+  contracts: SolutionLandscapeContractAssociation[];
+  evidence_count: number;
+  relationships_in: number;
+  relationships_out: number;
+};
+
+export type SolutionLandscapeEdge = {
+  id: string;
+  source_object_id: string;
+  target_object_id: string;
+  relationship_type: SolutionRelationshipType;
+  description: string | null;
+  created_in_state_id: string | null;
+  state_applicability: "canonical" | "state";
+  state_name: string | null;
+  evidence_count: number;
+};
+
+export type SolutionLandscape = {
+  state_id: string;
+  state_type: string;
+  editable: boolean;
+  solutions: SolutionLandscapeNode[];
+  relationships: SolutionLandscapeEdge[];
+  warnings: SolutionLandscapeWarning[];
+};
+
+export type SolutionRelationship = {
+  id: string;
+  tenant_id: string;
+  source_object_id: string;
+  target_object_id: string;
+  relationship_type: SolutionRelationshipType;
+  description: string | null;
+  created_in_state_id: string | null;
+  state_applicability: "canonical" | "state";
+  state_name: string | null;
+  evidence_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export function fetchSolutionLandscape(
+  workspaceId: string,
+  stateId: string,
+): Promise<SolutionLandscape> {
+  return run("load solution landscape", () =>
+    api<SolutionLandscape>(`${base(workspaceId)}/landscape?state_id=${stateId}`),
+  );
+}
+
+export function createSolutionRelationship(
+  workspaceId: string,
+  body: {
+    state_id: string;
+    source_object_id: string;
+    target_object_id: string;
+    relationship_type: SolutionRelationshipType;
+    description?: string | null;
+  },
+): Promise<SolutionRelationship> {
+  return run("create solution relationship", () =>
+    api<SolutionRelationship>(`${base(workspaceId)}/relationships`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+export function updateSolutionRelationship(
+  workspaceId: string,
+  relationshipId: string,
+  stateId: string,
+  patch: { relationship_type?: SolutionRelationshipType; description?: string | null },
+): Promise<SolutionRelationship> {
+  return run("update solution relationship", () =>
+    api<SolutionRelationship>(
+      `${base(workspaceId)}/relationships/${relationshipId}?state_id=${stateId}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+    ),
+  );
+}
+
+export function deleteSolutionRelationship(
+  workspaceId: string,
+  relationshipId: string,
+  stateId: string,
+): Promise<void> {
+  return run("remove solution relationship", () =>
+    api<void>(`${base(workspaceId)}/relationships/${relationshipId}?state_id=${stateId}`, {
       method: "DELETE",
     }),
   );

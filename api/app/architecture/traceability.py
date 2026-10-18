@@ -3,8 +3,9 @@
 Builds one canonical graph over the shared registry: stored edges from
 ``architecture_relationships`` plus edges *derived* from parent foreign keys and
 authoritative engine tables (attributes, operations, solution membership,
-integration field refs, scenario contract references). Nothing here writes to
-the database; derived edges are recomputed on read so they can never drift.
+integration field refs, scenario contract references, and an explicitly modelled
+contract mediator). Nothing here writes to the database; derived edges are
+recomputed on read so they can never drift.
 
 Endpoints
     GET ``/architecture-graph``          unified nodes + edges for a state
@@ -21,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.architecture.evidence import evidence_count as count_evidence
 from app.architecture.routes import get_accessible_workspace
 from app.architecture.schemas import (
     ArchitectureGraphResponse,
@@ -33,6 +35,7 @@ from app.architecture.schemas import (
     TraceStateMembership,
     TraceUsageGroup,
 )
+from app.architecture.solution_integration import ROLE_EDGE_TYPE
 from app.auth.dependencies import AuthenticatedUser, get_current_user
 from app.db import get_session
 from app.models import (
@@ -60,6 +63,7 @@ from app.models import (
     Scenario,
     SolutionBoundary,
     SolutionComponent,
+    SolutionIntegration,
     SolutionMember,
     TrustBoundary,
     Workspace,
@@ -111,6 +115,10 @@ USAGE_GROUP_LABELS = {
     "belongs_to": "Belongs to",
     "realizes": "Physical realization",
     "mapped_by": "Mapped into contracts",
+    "mediated_by": "Mediated by",
+    "owns_contract": "Owned contracts",
+    "participates_in_contract": "Participating contracts",
+    "depends_on_contract": "Dependent contracts",
     "verified_by": "Tests & evidence",
     "produces": "Produced by contract",
     "consumes": "Consumed by contract",
@@ -427,9 +435,39 @@ def _build_graph(
             )
         )
     )
+    # Surface an explicitly modelled mediator as a node so the derived
+    # ``Contract --mediated_by--> System`` edge has both ends. Only explicit
+    # mediators are materialized: the legacy runtime-endpoint heuristic is not
+    # persisted, so deriving it here would duplicate the explicit edge.
+    for integration in integ_rows:
+        mediator_id = integration.mediator_system_id
+        if mediator_id is None:
+            continue
+        name, description = names.names.get(mediator_id, ("(unnamed)", None))
+        nodes.setdefault(
+            mediator_id,
+            _node_ref(mediator_id, "system", name, description, membership),
+        )
     for integration in integ_rows:
         add_edge(integration.id, integration.producer_interface_id, "produces", derived=True)
         add_edge(integration.id, integration.consumer_interface_id, "consumes", derived=True)
+        add_edge(integration.id, integration.mediator_system_id, "mediated_by", derived=True)
+
+    # Solution Boundary -> Contract, labelled by the association role. Derived
+    # only: no ArchitectureRelationship row is stored, and the `seen` set keeps a
+    # Contract that is both associated and a solution member from duplicating.
+    for association in db.scalars(
+        select(SolutionIntegration).where(SolutionIntegration.tenant_id == tenant_id)
+    ):
+        edge_type = ROLE_EDGE_TYPE.get(association.role)
+        if edge_type is None:
+            continue
+        add_edge(
+            association.solution_object_id,
+            association.integration_id,
+            edge_type,
+            derived=True,
+        )
 
     field_refs = list(
         db.scalars(
@@ -549,6 +587,19 @@ def object_usages(
     disciplines.update(item.object.discipline for item in outgoing if item.object.discipline)
     disciplines.update(item.object.discipline for item in incoming if item.object.discipline)
 
+    # Evidence stays out of the graph and out of layout: the inspector only
+    # reports how much evidence supports this object for the selected state.
+    if root.kind == "contract_ref":
+        evidence_count = count_evidence(
+            db, workspace.tenant_id, "integration", object_id, state.id
+        )
+    elif root.kind == "scenario_ref":
+        evidence_count = 0
+    else:
+        evidence_count = count_evidence(
+            db, workspace.tenant_id, "architecture_object", object_id, state.id
+        )
+
     groups: list[TraceUsageGroup] = []
     for rel, items in grouped.items():
         label = USAGE_GROUP_LABELS.get(rel, rel.replace("_", " ").capitalize())
@@ -591,6 +642,7 @@ def object_usages(
         physical_refs=physical_refs,
         tests=tests,
         principles=principles,
+        evidence_count=evidence_count,
     )
 
 

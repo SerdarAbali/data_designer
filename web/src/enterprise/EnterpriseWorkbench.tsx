@@ -98,6 +98,8 @@ export default function EnterpriseWorkbench({
 
   const [newKind, setNewKind] = useState<EnterpriseObjectType>("goal");
   const [newName, setNewName] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const [capabilityMap, setCapabilityMap] = useState<CapabilityMap | null>(null);
   const [processImpact, setProcessImpact] = useState<ProcessImpact | null>(null);
@@ -105,7 +107,7 @@ export default function EnterpriseWorkbench({
   const [applicationSupport, setApplicationSupport] = useState<ApplicationSupport | null>(null);
   const [impact, setImpact] = useState<EnterpriseImpact | null>(null);
 
-  const isEditable = editable && model?.state_type !== "current";
+  const isEditable = editable && model?.editable === true;
 
   const reloadModel = useCallback(async () => {
     if (!workspaceId || !stateId) {
@@ -308,59 +310,116 @@ export default function EnterpriseWorkbench({
 
   return (
     <div className={`enterprise-workbench${showInspector ? " has-panel" : ""}`}>
-      <div className="enterprise-toolbar">
-        <span className="enterprise-title">Enterprise</span>
-        <select
-          aria-label="New object type"
-          value={newKind}
-          disabled={!isEditable || busy}
-          onChange={(event) => setNewKind(event.target.value as EnterpriseObjectType)}
-        >
-          {ENTERPRISE_OBJECT_TYPES.map((kind) => (
-            <option key={kind} value={kind}>
-              {ENTERPRISE_LABELS[kind]}
-            </option>
-          ))}
-        </select>
-        <input
-          aria-label="New object name"
-          value={newName}
-          disabled={!isEditable || busy}
-          placeholder="New object name"
-          onChange={(event) => setNewName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && newName.trim()) handleCreateObject();
-          }}
-        />
-        <button
-          type="button"
-          className="studio-add-menu"
-          disabled={!isEditable || busy || !newName.trim()}
-          onClick={handleCreateObject}
-        >
-          + Add object
-        </button>
-        {view === "strategy" && (
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={!isEditable || busy || !strategyTrace}
-            title={isEditable ? "Recompute the strategy trace layout" : "Current state is read-only"}
-            onClick={() => handleAutoArrange()}
-          >
-            Auto arrange
-          </button>
-        )}
-        <span className="enterprise-toolbar-hint">
-          {isEditable
-            ? "Author goals, capabilities, processes, principles and roles."
-            : "Current state is read-only. Duplicate it to model changes."}
-        </span>
-        {onOpenCatalog && (
-          <button type="button" className="secondary-button" onClick={onOpenCatalog}>
-            Open catalog
-          </button>
-        )}
+      <div className="view-toolbar">
+        <div className="view-toolbar-left">
+          <div className="view-toolbar-title">
+            <p className="eyebrow">Enterprise</p>
+            <h2>Objects</h2>
+          </div>
+          <span className="view-toolbar-count">{objects.length}</span>
+        </div>
+        <div className="view-toolbar-right">
+          {onOpenCatalog && (
+            <button type="button" className="btn btn--secondary" onClick={onOpenCatalog}>
+              Open catalog
+            </button>
+          )}
+          <div className="creation-popover">
+            <button
+              type="button"
+              className="btn btn--primary"
+              aria-expanded={createOpen}
+              aria-haspopup="dialog"
+              disabled={!isEditable || busy}
+              onClick={() => setCreateOpen((open) => !open)}
+            >
+              + New object
+            </button>
+            <section className="creation-panel" hidden={!createOpen} aria-label="Create enterprise object">
+              <header>
+                <h3>New object</h3>
+                <button
+                  type="button"
+                  className="creation-close"
+                  aria-label="Close creation popover"
+                  onClick={() => setCreateOpen(false)}
+                >
+                  ✕
+                </button>
+              </header>
+              <div className="creation-fields">
+                <label>
+                  Type
+                  <select
+                    value={newKind}
+                    disabled={!isEditable || busy}
+                    onChange={(event) => setNewKind(event.target.value as EnterpriseObjectType)}
+                  >
+                    {ENTERPRISE_OBJECT_TYPES.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {ENTERPRISE_LABELS[kind]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Name
+                  <input
+                    value={newName}
+                    disabled={!isEditable || busy}
+                    placeholder="New object name"
+                    onChange={(event) => setNewName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && newName.trim()) handleCreateObject();
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="creation-actions">
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  disabled={!isEditable || busy}
+                  onClick={() => setCreateOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={!isEditable || busy || !newName.trim()}
+                  onClick={handleCreateObject}
+                >
+                  Create
+                </button>
+              </div>
+            </section>
+          </div>
+          <div className="more-menu">
+            <button
+              type="button"
+              className="more-menu-trigger"
+              aria-expanded={moreOpen}
+              aria-label="More actions"
+              onClick={() => setMoreOpen((open) => !open)}
+            >
+              More ⌄
+            </button>
+            <section className="more-menu-panel" hidden={!moreOpen} aria-label="More actions">
+              {view === "strategy" && (
+                <button
+                  type="button"
+                  className="more-menu-item"
+                  disabled={!isEditable || busy || !strategyTrace}
+                  title={isEditable ? "Recompute the strategy trace layout" : "Current state is read-only"}
+                  onClick={() => handleAutoArrange()}
+                >
+                  Auto arrange
+                </button>
+              )}
+            </section>
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -373,12 +432,12 @@ export default function EnterpriseWorkbench({
       )}
 
       <div className="enterprise-body">
-        <nav className="enterprise-views" aria-label="Enterprise views">
+        <nav className="enterprise-views tabs" aria-label="Enterprise views">
           {VIEWS.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={view === item.id ? "active" : ""}
+              className={`tab${view === item.id ? " active" : ""}`}
               onClick={() => setView(item.id)}
             >
               {item.label}
@@ -402,9 +461,11 @@ export default function EnterpriseWorkbench({
               {view === "objects" && (
                 <div className="enterprise-objects">
                   {grouped.length === 0 ? (
-                    <p className="architecture-topbar-hint">
-                      No objects match. Add goals, capabilities and processes to get started.
-                    </p>
+                    <div className="empty-state empty-state--page" role="status">
+                      <span className="empty-icon">◇</span>
+                      <h3>No objects match</h3>
+                      <p>Add goals, capabilities and processes to get started.</p>
+                    </div>
                   ) : (
                     grouped.map((group) => (
                       <section key={group.kind} className="enterprise-group">
@@ -419,6 +480,7 @@ export default function EnterpriseWorkbench({
                                 type="button"
                                 className={`enterprise-object-card${object.object_id === selectedObjectId ? " selected" : ""}`}
                                 onClick={() => selectObject(object.object_id)}
+                                title={object.name}
                               >
                                 <em>{ENTERPRISE_LABELS[object.kind] ?? object.kind}</em>
                                 <strong title={object.name}>{object.name}</strong>

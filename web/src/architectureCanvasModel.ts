@@ -13,6 +13,10 @@ export type CanonicalSystem = {
   kind: string;
   icon: string | null;
   color: string | null;
+  /** Generic facts; `null`/missing means unspecified, never a concrete value. */
+  lifecycle_stage?: string | null;
+  operational_status?: string | null;
+  environment_scope?: string | null;
 };
 
 export type ResolvedOccurrence = {
@@ -63,8 +67,25 @@ export type ResolvedRelationship = {
   integrationId: string | null;
 };
 
+/**
+ * The one editability rule, mirroring the server's write policy: a Current state
+ * is read-only only once its baseline is locked. A Current state with no
+ * recorded status is treated as locked, exactly like the server does.
+ */
 export function isEditableState(state: ArchitectureState | null): boolean {
-  return state != null && state.state_type !== "current";
+  if (state == null) return false;
+  if (state.state_type !== "current") return true;
+  return state.baseline_status === "draft";
+}
+
+/** True when the state is the Current baseline and it is not yet locked. */
+export function isDraftCurrentBaseline(state: ArchitectureState | null): boolean {
+  return state != null && state.state_type === "current" && state.baseline_status === "draft";
+}
+
+/** True when the state is the Current baseline and it has been locked. */
+export function isLockedCurrentBaseline(state: ArchitectureState | null): boolean {
+  return state != null && state.state_type === "current" && state.baseline_status !== "draft";
 }
 
 export function projectStateNodes(

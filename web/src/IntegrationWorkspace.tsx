@@ -1,6 +1,7 @@
 import React from "react";
 import type { GraphDocument, GraphNodeDocument, GraphNodeType } from "./contractGraphTypes";
 import ContractCsvDialog from "./components/ContractCsvDialog";
+import ContractWorkbookDialog from "./components/ContractWorkbookDialog";
 import { downloadCsv, templateMappingCsv } from "./contractMappingCsv";
 import {
   addEdge,
@@ -194,6 +195,8 @@ export type MappingMatrixRow = {
 
 type Props = {
   onBack: () => void;
+  /** Active workspace id; the governed workbook endpoints are workspace scoped. */
+  workspaceId?: string;
   initialIntegrationId?: string;
   /** Phase tab (or the Scenarios tab) to show once the initial contract has loaded. */
   initialContractView?: ContractView | "scenarios";
@@ -582,7 +585,7 @@ function newUuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function toFlowNode(
+export function toFlowNode(
   item: GraphNodeDocument,
   sourceFields: CatalogField[],
   targetFields: CatalogField[],
@@ -601,7 +604,11 @@ function toFlowNode(
     id: item.id,
     type: item.type,
     deletable: item.type !== "source" && item.type !== "target",
-    draggable: item.type !== "source" && item.type !== "target",
+    // Every node is movable. The source and target frames are the anchors of the
+    // mapping, so dragging them apart (or closer) is how you make room for the
+    // transformations between them. Their coordinates are saved with the graph
+    // and restored on reload, exactly like a transformation node's.
+    draggable: true,
     position: item.position,
     data: {
       label,
@@ -1023,7 +1030,7 @@ function FieldNode({ data, type }: NodeProps<FlowNode>) {
           {!!data.fields?.length && !visibleFields.length && <small className="flow-no-fields">No matching fields</small>}
           {data.onAddField && <button
             type="button"
-            className="flow-add-field"
+            className="flow-add-field nodrag nopan"
             onClick={(event) => {
               event.stopPropagation();
               data.onAddField?.(source ? "source" : "target");
@@ -1186,6 +1193,11 @@ export type WorkbenchLayoutContext = {
 
 const TRANSFORM_NODE_FALLBACK_WIDTH = 150;
 const TRANSFORM_NODE_HEIGHT = 36;
+
+// One framing for the whole canvas: the initial mount and the "Fit view" action
+// both use it, so opening a contract always lands centered on its content with
+// the same padding and zoom bounds.
+export const CANVAS_FIT_VIEW_OPTIONS = { padding: 0.18, minZoom: 0.72, maxZoom: 1.05 };
 
 function estimatedFieldCenterY(
   nodeY: number,
@@ -1405,6 +1417,7 @@ function integrationUsesField(integration: Integration, fieldId: string): boolea
 
 export default function IntegrationWorkspace({
   onBack,
+  workspaceId,
   initialIntegrationId,
   initialContractView,
   newIntegrationSystemId,
@@ -1518,6 +1531,7 @@ export default function IntegrationWorkspace({
     return () => registerNavigationGuard?.(async () => true);
   }, [navigationGuard, registerNavigationGuard]);
   const [csvDialog, setCsvDialog] = React.useState<"import" | "export" | null>(null);
+  const [workbookDialog, setWorkbookDialog] = React.useState<"import" | "export" | null>(null);
   const [csvUndo, setCsvUndo] = React.useState<{
     nodes: FlowNode[];
     edges: FlowEdge[];
@@ -1810,9 +1824,7 @@ export default function IntegrationWorkspace({
   function frameCanvas(duration = 220) {
     window.requestAnimationFrame(() => {
       void flowInstance.current?.fitView({
-        padding: 0.18,
-        minZoom: 0.72,
-        maxZoom: 1.05,
+        ...CANVAS_FIT_VIEW_OPTIONS,
         duration,
       });
     });
@@ -3666,18 +3678,20 @@ export default function IntegrationWorkspace({
   return (
     <section className={`integration-workspace${selectedIntegration ? " has-integration" : ""}`}>
       <header className="integration-header">
-        <button type="button" className="back-link" onClick={onBack}>← Return to Architecture Canvas</button>
-        <div className="contract-heading">
-          <h1>{selectedIntegration ? name || selectedIntegration.name : "New contract"}</h1>
-          <p>
-            {sourceSystem?.name ?? "Source"} / {objectName(sourceObjects, sourceObjectId)}
-            <span aria-hidden="true"> → </span>
-            {targetSystem?.name ?? "Target"} / {objectName(targetObjects, targetObjectId)}
-          </p>
+        <div className="contract-identity-left">
+          <button type="button" className="back-link" onClick={onBack}>← Return to Architecture Canvas</button>
+          <div className="contract-heading">
+            <h1>{selectedIntegration ? name || selectedIntegration.name : "New contract"}</h1>
+            <p>
+              {sourceSystem?.name ?? "Source"} / {objectName(sourceObjects, sourceObjectId)}
+              <span aria-hidden="true"> → </span>
+              {targetSystem?.name ?? "Target"} / {objectName(targetObjects, targetObjectId)}
+            </p>
+          </div>
         </div>
-        <div className="integration-toolbar">
+        <div className="contract-identity-right">
           <label className="compact-picker switch-contract-picker">
-            <span className="compact-picker-label">Switch contract</span>
+            <span className="compact-picker-label">Contract</span>
             <select
               value={selectedIntegrationId}
               onChange={(event) => {
@@ -3713,39 +3727,13 @@ export default function IntegrationWorkspace({
               <span className={dirty ? "save-state unsaved" : "save-state"} aria-live="polite">
                 {dirty ? "Unsaved changes" : `Saved · r${revision}`}
               </span>
-              <button type="button" className="secondary-button" onClick={() => void refreshFieldMetadata()} disabled={loading}>
-                Reload Schema
-              </button>
-              <button
-                type="button"
-                className={`secondary-button${dataPreviewOpen ? " preview-toggle-active" : ""}`}
-                aria-label="Preview payload"
-                aria-expanded={dataPreviewOpen}
-                onClick={() => {
-                  setSamplePanelExpanded(false);
-                  setDataPreviewOpen((open) => !open);
-                }}
-              >
-                Preview Payload
-              </button>
-              <label className="compact-picker">
-                <select
-                  value={interactionType}
-                  onChange={(event) => updateInteractionType(event.target.value as InteractionType)}
-                  aria-label="Interaction"
-                >
-                  <option value="ONE_WAY">One way</option>
-                  <option value="REQUEST_RESPONSE">Request / response</option>
-                  <option value="ASYNC_CALLBACK">Async callback</option>
-                </select>
-              </label>
-              <button type="button" onClick={() => void saveGraph()} disabled={saving || !dirty || Boolean(configError)}>
-                {saving ? "Saving…" : "Save"}
-              </button>
-              {csvUndo && csvUndo.afterKey === csvContextKey &&
-                <button type="button" className="secondary-button" onClick={undoCsvImport} disabled={saving}>Undo import</button>}
+              {dirty && (
+                <button type="button" className="btn btn--primary" onClick={() => void saveGraph()} disabled={saving || !dirty || Boolean(configError)}>
+                  {saving ? "Saving…" : "Save"}
+                </button>
+              )}
               <details className="contract-overflow">
-                <summary aria-label="Contract settings">⋯</summary>
+                <summary aria-label="More contract actions">⋯</summary>
                 <div
                   className="contract-overflow-menu"
                   onClick={(event) => {
@@ -3754,23 +3742,61 @@ export default function IntegrationWorkspace({
                     }
                   }}
                 >
-                  <button type="button" onClick={() => setDrawerView("settings")}>Contract settings</button>
-                  <button type="button" onClick={() => setDrawerView("validation")}>Design validation</button>
-                  <button type="button" disabled={Boolean(csvUnavailableReason)} title={csvUnavailableReason}
-                    onClick={() => setCsvDialog("import")}>Import CSV</button>
-                  <button type="button" disabled={Boolean(csvUnavailableReason)} title={csvUnavailableReason}
-                    onClick={() => setCsvDialog("export")}>Export CSV</button>
-                  <button type="button" disabled={Boolean(csvUnavailableReason)} title={csvUnavailableReason}
+                  <button type="button" className="more-menu-item" onClick={() => setDrawerView("settings")}>
+                    Contract settings
+                  </button>
+                  <button type="button" className="more-menu-item" onClick={() => setDrawerView("validation")}>
+                    Design validation
+                  </button>
+                  <button type="button" className="more-menu-item" onClick={() => void refreshFieldMetadata()} disabled={loading}>
+                    Reload Schema
+                  </button>
+                  <button
+                    type="button"
+                    className={`more-menu-item${dataPreviewOpen ? " preview-toggle-active" : ""}`}
+                    aria-label="Preview payload"
+                    aria-expanded={dataPreviewOpen}
                     onClick={() => {
-                      downloadCsv(templateMappingCsv(activeSourceFields, activeTargetFields),
-                        `${name}-${contractView}-mappings-v1-template.csv`);
-                      setEditorNotice("Template downloaded. It may contain one example mapping; review it before importing.");
-                    }}>Download CSV template</button>
+                      setSamplePanelExpanded(false);
+                      setDataPreviewOpen((open) => !open);
+                    }}
+                  >
+                    Preview Payload
+                  </button>
+                  <button type="button" className="more-menu-item" disabled={Boolean(csvUnavailableReason)} title={csvUnavailableReason} onClick={() => setCsvDialog("import")}>
+                    Import CSV
+                  </button>
+                  <button type="button" className="more-menu-item" disabled={Boolean(csvUnavailableReason)} title={csvUnavailableReason} onClick={() => setCsvDialog("export")}>
+                    Export CSV
+                  </button>
+                  <button type="button" className="more-menu-item" disabled={Boolean(csvUnavailableReason)} title={csvUnavailableReason} onClick={() => {
+                    downloadCsv(templateMappingCsv(activeSourceFields, activeTargetFields), `${name}-${contractView}-mappings-v1-template.csv`);
+                    setEditorNotice("Template downloaded. It may contain one example mapping; review it before importing.");
+                  }}>
+                    Download CSV template
+                  </button>
+                  <hr className="more-menu-separator" />
+                  <button
+                    type="button"
+                    className="more-menu-item"
+                    disabled={!workspaceId}
+                    title={workspaceId ? undefined : "The workspace is still loading."}
+                    onClick={() => setWorkbookDialog("export")}
+                  >
+                    Export mapping workbook
+                  </button>
+                  <button
+                    type="button"
+                    className="more-menu-item"
+                    disabled={!workspaceId}
+                    title={workspaceId ? undefined : "The workspace is still loading."}
+                    onClick={() => setWorkbookDialog("import")}
+                  >
+                    Import mapping workbook
+                  </button>
                   {csvUnavailableReason && <p>{csvUnavailableReason}</p>}
-                  <button type="button" onClick={() => {
-                    setSamplePanelExpanded(false);
-                    setDataPreviewOpen((open) => !open);
-                  }}>Preview Payload</button>
+                  {csvUndo && csvUndo.afterKey === csvContextKey &&
+                    <button type="button" className="more-menu-item" onClick={undoCsvImport} disabled={saving}>Undo import</button>}
                 </div>
               </details>
             </>
@@ -3787,6 +3813,25 @@ export default function IntegrationWorkspace({
       {editorNotice && <div className="editor-toast success" role="status">
         <span>{editorNotice}</span>
       </div>}
+      {workbookDialog && selectedIntegration && workspaceId && <ContractWorkbookDialog
+        kind={workbookDialog}
+        workspaceId={workspaceId}
+        integrationId={selectedIntegration.id}
+        contractName={selectedIntegration.name}
+        revision={selectedIntegration.revision}
+        onApplied={(applied) => {
+          setWorkbookDialog(null);
+          setEditorNotice(
+            applied.applied
+              ? `Mapping workbook applied at revision ${applied.revision}: ` +
+                `${applied.counts.add} added, ${applied.counts.update} updated, ` +
+                `${applied.counts.remove} removed, ${applied.counts.unchanged} unchanged.`
+              : "Mapping workbook reviewed; nothing had changed.",
+          );
+          void reloadIntegration();
+        }}
+        onClose={() => setWorkbookDialog(null)}
+      />}
       {csvDialog && selectedIntegration && <ContractCsvDialog
         kind={csvDialog} contractName={name} phase={contractView} dirty={dirty}
         graph={csvGraph} senderFields={activeSourceFields} receiverFields={activeTargetFields}
@@ -3832,10 +3877,10 @@ export default function IntegrationWorkspace({
 
       {selectedIntegration && (
         <>
-          <nav className="contract-phase-tabs" aria-label="Contract views">
+          <nav className="contract-phase-tabs tabs" aria-label="Contract views">
             <button
               type="button"
-              className={contractView === "overview" && !scenariosOpen ? "active" : ""}
+              className={`tab${contractView === "overview" && !scenariosOpen ? " active" : ""}`}
               aria-current={contractView === "overview" && !scenariosOpen ? "page" : undefined}
               onClick={() => selectContractView("overview")}
             >
@@ -3843,7 +3888,7 @@ export default function IntegrationWorkspace({
             </button>
             <button
               type="button"
-              className={contractView === "request" ? "active" : ""}
+              className={`tab${contractView === "request" ? " active" : ""}`}
               aria-current={contractView === "request" ? "page" : undefined}
               onClick={() => selectContractView("request")}
             >
@@ -3853,7 +3898,7 @@ export default function IntegrationWorkspace({
               <>
                 <button
                   type="button"
-                  className={contractView === "success-response" ? "active" : ""}
+                  className={`tab${contractView === "success-response" ? " active" : ""}`}
                   aria-current={contractView === "success-response" ? "page" : undefined}
                   onClick={() => selectContractView("success-response")}
                 >
@@ -3861,7 +3906,7 @@ export default function IntegrationWorkspace({
                 </button>
                 <button
                   type="button"
-                  className={contractView === "error-response" ? "active" : ""}
+                  className={`tab${contractView === "error-response" ? " active" : ""}`}
                   aria-current={contractView === "error-response" ? "page" : undefined}
                   onClick={() => selectContractView("error-response")}
                 >
@@ -3872,7 +3917,7 @@ export default function IntegrationWorkspace({
             {interactionType === "ASYNC_CALLBACK" && (
               <button
                 type="button"
-                className={contractView === "async-response" ? "active" : ""}
+                className={`tab${contractView === "async-response" ? " active" : ""}`}
                 aria-current={contractView === "async-response" ? "page" : undefined}
                 onClick={() => selectContractView("async-response")}
               >
@@ -3881,7 +3926,7 @@ export default function IntegrationWorkspace({
             )}
             <button
               type="button"
-              className={`contract-scenarios-tab${scenariosOpen ? " active" : ""}`}
+              className={`tab${scenariosOpen ? " active" : ""}`}
               aria-current={scenariosOpen ? "page" : undefined}
               onClick={openScenarios}
             >
@@ -4434,6 +4479,11 @@ export default function IntegrationWorkspace({
                     }}
                     deleteKeyCode={["Backspace", "Delete"]}
                     proOptions={{ hideAttribution: true }}
+                    // Frame the graph on mount. The canvas is keyed by contract
+                    // and phase, so opening a contract (or a mapping tab) always
+                    // starts centered on its content instead of at the origin.
+                    fitView
+                    fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
                   >
                     <Background color="var(--color-grid)" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
                     <MiniMap

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import type { SaveStatus } from "../components/architecture/ArchitectureTopBar";
 import UnifiedInspector from "../components/inspector/UnifiedInspector";
+import SolutionContractsPanel from "./SolutionContractsPanel";
 import type { SolutionDesign } from "./solutionModel";
 
 type CatalogSystem = { id: string; name: string; kind: string };
@@ -21,6 +22,10 @@ type Props = {
   onClose: () => void;
   onCollapse: () => void;
   trace?: ReactNode;
+  /** Required by the Contracts tab; omitted only in isolated tests. */
+  workspaceId?: string;
+  stateId?: string;
+  onOpenContract?: (contractId: string) => void;
 };
 
 export default function SolutionContextEditor({
@@ -38,6 +43,9 @@ export default function SolutionContextEditor({
   onClose,
   onCollapse,
   trace,
+  workspaceId,
+  stateId,
+  onOpenContract,
 }: Props) {
   const [name, setName] = useState(design.solution.name);
   const [owner, setOwner] = useState(design.solution.owner ?? "");
@@ -146,6 +154,20 @@ export default function SolutionContextEditor({
     </section>
   );
 
+  const contractsPanel =
+    workspaceId && stateId && onOpenContract ? (
+      <SolutionContractsPanel
+        workspaceId={workspaceId}
+        solutionId={design.solution.solution_object_id}
+        stateId={stateId}
+        editable={editable}
+        busy={busy}
+        onOpenContract={onOpenContract}
+      />
+    ) : (
+      <p className="muted">Contract associations are unavailable here.</p>
+    );
+
   return (
     <UnifiedInspector
       ariaLabel="Solution context"
@@ -163,6 +185,7 @@ export default function SolutionContextEditor({
       panels={[
         { id: "properties", label: "Properties", content: properties },
         { id: "relationships", label: "Membership", count: design.solution.members.length, content: relationships },
+        { id: "contracts", label: "Contracts", content: contractsPanel },
         { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
       ]}
     />

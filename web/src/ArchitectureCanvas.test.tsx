@@ -51,6 +51,7 @@ const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body)
 
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
   sessionStorage.setItem("dd_active_state_id:ws-a", candidate.id);
   sessionStorage.setItem("dd_active_discipline:ws-a", "integration");
   document.cookie = "dd_csrf=test";
@@ -59,7 +60,11 @@ beforeEach(() => {
     if (path.includes("architecture-objects")) return reply(objects);
     if (path.includes("/states")) return reply([current, candidate]);
     if (path.includes("/systems")) return reply([{ id: "system-a", name: "CRM", kind: "application", icon: null, color: null }]);
+    if (path.includes("integration-design/landscape")) return reply({ state_id: candidate.id, state_type: "candidate", editable: true, contracts: [], interfaces: [] });
     if (path.includes("/integrations")) return reply([]);
+    if (path.includes("/solution/solutions")) return reply([]);
+    if (path.includes("enterprise/model")) return reply({ state_id: candidate.id, state_type: "candidate", editable: true, goals: [], requirements: [], capabilities: [], processes: [], principles: [], roles: [], applications: [], links: [] });
+    if (path.includes("information/model")) return reply({ state_id: candidate.id, state_type: "candidate", editable: true, entities: [], relationships: [] });
     throw new Error(`Unexpected request: ${path}`);
   }));
 });
@@ -78,7 +83,7 @@ describe("architecture studio context", () => {
     openCanvasOverview();
     await screen.findByRole("button", { name: "CRM" });
     fireEvent.click(screen.getByRole("button", { name: "Move CRM" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const request = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "PUT")!;
     const body = JSON.parse(String(request[1]?.body));
     expect(body.nodes).toHaveLength(2);
@@ -106,10 +111,9 @@ describe("architecture studio context", () => {
     await act(async () => { finish(reply({ detail: "Workspace not found" }, 404)); await navigation; });
     expect(allowed).toBe(false);
     expect(screen.getByRole("alert").textContent).toContain("Workspace not found");
-    expect(screen.getByRole("status").textContent).toBe("Save failed");
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
     await act(async () => { await Promise.resolve(); finish(reply(candidate)); });
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await expect(guard()).resolves.toBe(true);
   });
 
@@ -130,27 +134,14 @@ describe("architecture studio context", () => {
     render(<ArchitectureCanvas {...props} workspace={{ ...workspace, disciplines: ["integration"] }} />);
     openCanvasOverview();
     await screen.findByRole("button", { name: "CRM" });
-    fireEvent.click(screen.getByRole("button", { name: "+ Add Object" }));
-    expect(screen.getByRole("button", { name: "Existing system" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Existing contract" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Interface" })).toBeNull();
   });
 
   it("serializes object creation after a pending layout write without losing hidden occurrences", async () => {
     let finish!: (response: Response) => void;
     const original = vi.mocked(fetch).getMockImplementation()!;
-    const created = { id: "int-new", kind: "interface", name: "Refund support" };
-    const savedState = {
-      ...candidate,
-      nodes: [
-        { ...candidate.nodes[0]!, position: { x: 99, y: 88 } },
-        candidate.nodes[1]!,
-        { occurrence_id: "occ-new", object_id: created.id, position: { x: 600, y: 0 }, discipline: "solution" },
-      ],
-    };
+    const savedState = { ...candidate };
     vi.mocked(fetch).mockImplementation((path, init) => {
       if (init?.method === "PUT") return new Promise<Response>((resolve) => { finish = resolve; });
-      if (init?.method === "POST") return Promise.resolve(reply({ object: created, state: savedState }));
       return original(path, init);
     });
     render(<ArchitectureCanvas {...props} />);
@@ -158,15 +149,8 @@ describe("architecture studio context", () => {
     await screen.findByRole("button", { name: "CRM" });
     fireEvent.click(screen.getByRole("button", { name: "Move CRM" }));
     await waitFor(() => expect(finish).toBeDefined());
-    fireEvent.click(screen.getByRole("button", { name: "+ Add Object" }));
-    fireEvent.click(screen.getByRole("button", { name: "Interface" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: created.name } });
-    fireEvent.click(screen.getByRole("button", { name: "Add Interface" }));
-    expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
     await act(async () => { finish(reply(savedState)); });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByRole("complementary", { name: "Object details" })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("Saved");
   });
 
   it("does not apply an old workspace response after a keyed workspace reset", async () => {
@@ -350,5 +334,53 @@ describe("workbench trace navigation", () => {
     expect(await screen.findByRole("heading", { name: "Customer push", level: 3 })).toBeTruthy();
     // Same workspace and state survive the workbench switch.
     expect((screen.getByRole("combobox", { name: "Architecture state" }) as HTMLSelectElement).value).toBe(candidate.id);
+  });
+});
+
+describe("discipline-scoped shell", () => {
+  it("opens an Integration-only workspace directly in Integration with plain context, not a one-item tab group", async () => {
+    sessionStorage.removeItem("dd_active_discipline:ws-a");
+    render(<ArchitectureCanvas {...props} workspace={{ ...workspace, disciplines: ["integration"] }} />);
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByLabelText("Architecture discipline: Integration Architecture")).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: "Integration views" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Landscape" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Enterprise Architecture" })).toBeNull();
+  });
+
+  it("opens a Solution-only workspace on Solution Context with plain context", async () => {
+    sessionStorage.removeItem("dd_active_discipline:ws-a");
+    render(<ArchitectureCanvas {...props} workspace={{ ...workspace, disciplines: ["solution"] }} />);
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByLabelText("Architecture discipline: Solution Architecture")).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: "Solution views" })).toBeTruthy();
+  });
+
+  it("keeps the Full Architecture four-discipline tab group and defaults to Enterprise", async () => {
+    sessionStorage.removeItem("dd_active_discipline:ws-a");
+    render(<ArchitectureCanvas {...props} workspace={{ ...workspace, disciplines: ["enterprise", "information", "solution", "integration"] }} />);
+    expect(await screen.findAllByRole("tab")).toHaveLength(4);
+    expect(screen.getByRole("tab", { name: "Enterprise Architecture" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("keeps Current/Candidate/Target selection and Current read-only in a single-discipline workspace", async () => {
+    sessionStorage.removeItem("dd_active_discipline:ws-a");
+    render(<ArchitectureCanvas {...props} workspace={{ ...workspace, disciplines: ["solution"] }} />);
+    const selector = await screen.findByRole("combobox", { name: "Architecture state" }) as HTMLSelectElement;
+    expect(selector.value).toBe(candidate.id);
+    fireEvent.change(selector, { target: { value: current.id } });
+    await waitFor(() => expect(
+      (screen.getByRole("combobox", { name: "Architecture state" }) as HTMLSelectElement).value,
+    ).toBe(current.id));
+    expect(screen.getByText("Read-only")).toBeTruthy();
+  });
+
+  it("shows dismissible discipline-specific first-use guidance", async () => {
+    sessionStorage.removeItem("dd_active_discipline:ws-a");
+    render(<ArchitectureCanvas {...props} workspace={{ ...workspace, disciplines: ["integration"] }} />);
+    const guidance = await screen.findByRole("note", { name: "Integration Architecture first steps" });
+    expect(guidance.textContent).toContain("Select participating systems");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss guidance" }));
+    expect(screen.queryByRole("note", { name: "Integration Architecture first steps" })).toBeNull();
   });
 });

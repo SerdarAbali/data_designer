@@ -113,6 +113,7 @@ def raise_if_integration_references(
         query = query.where(
             (Integration.source_system_id == system_id)
             | (Integration.target_system_id == system_id)
+            | (Integration.mediator_system_id == system_id)
         )
     if object_id is not None:
         query = query.where(
@@ -221,6 +222,9 @@ def create_system(
         external_identifier=payload.external_identifier,
         position=payload.position,
         binding_state=payload.binding_state,
+        lifecycle_stage=payload.lifecycle_stage,
+        operational_status=payload.operational_status,
+        environment_scope=payload.environment_scope,
         extra_metadata=payload.metadata,
     )
     db.add(system)
@@ -283,6 +287,30 @@ def archive_system(
             )
         )
         archive_integrations_for_cascade(db, user.tenant_id, referencing_integrations, now)
+        # Chosen cascade behaviour for explicit mediators: a mediator is an
+        # overlay, not a business endpoint, so a Contract that references the
+        # archived system *only* as its mediator keeps its business direction
+        # and simply loses the mediator overlay. Contracts that also use the
+        # system as source/target were already archived above.
+        archived_ids = {integration.id for integration in referencing_integrations}
+        mediator_integrations = list(
+            db.scalars(
+                select(Integration)
+                .where(
+                    Integration.tenant_id == user.tenant_id,
+                    Integration.deleted_at.is_(None),
+                    Integration.mediator_system_id == system.id,
+                )
+                .with_for_update()
+            )
+        )
+        for integration in mediator_integrations:
+            if integration.id in archived_ids:
+                continue
+            integration.mediator_system_id = None
+            integration.mediator_responsibility = None
+            integration.updated_at = now
+            integration.revision += 1
     else:
         raise_if_integration_references(db, user.tenant_id, system_id=system.id)
     system.deleted_at = system.updated_at = now

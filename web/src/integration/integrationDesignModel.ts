@@ -45,6 +45,13 @@ export const IMPLEMENTATION_STATUSES: ImplementationStatus[] = [
   "verified",
 ];
 
+export const IMPLEMENTATION_STATUS_LABELS: Record<ImplementationStatus, string> = {
+  draft: "Draft",
+  in_progress: "In progress",
+  built: "Built",
+  verified: "Verified",
+};
+
 export const AUTH_TYPES: AuthType[] = [
   "none",
   "api_key",
@@ -144,6 +151,46 @@ export type IntegrationEndpointRef = {
   is_runtime?: boolean;
 };
 
+/** How a contract's mediation was determined. */
+export type MediationSource = "explicit" | "legacy_endpoint_heuristic" | "none";
+
+/**
+ * The system that carries a Contract's exchange. A mediator is an overlay on
+ * top of the business source -> target direction; it is never an endpoint.
+ */
+export type IntegrationMediatorRef = {
+  system_id: string;
+  system_name: string;
+  system_kind?: string | null;
+  is_runtime?: boolean;
+  responsibility?: string | null;
+  explicit?: boolean;
+};
+
+/**
+ * A physical Catalog object a Contract references through its field refs. This
+ * is the objectively derivable "information reference" used by Landscape
+ * filters; no business domain is ever guessed from an object name.
+ */
+export type IntegrationInformationRef = {
+  object_id: string;
+  name: string;
+  label: string;
+  system_id?: string | null;
+  system_name?: string | null;
+  anchors: string[];
+};
+
+export type IntegrationFactValue = {
+  /** Effective value: the state override when present, else canonical. */
+  value: string | null;
+  /** The Current baseline, so an override can show what it departs from. */
+  canonical: string | null;
+  /** The raw state override, or null when the state does not override. */
+  override: string | null;
+  overridden: boolean;
+};
+
 export type IntegrationContractSummary = {
   id: string;
   name: string;
@@ -156,6 +203,14 @@ export type IntegrationContractSummary = {
   status: string;
   source: IntegrationEndpointRef;
   target: IntegrationEndpointRef;
+  /** Explicit mediator overlay, when one is modelled. */
+  mediator?: IntegrationMediatorRef | null;
+  /** True only when the mediator comes from the canonical explicit field. */
+  explicit_mediator?: boolean;
+  /** True when the contract is mediated (explicitly or via the legacy heuristic). */
+  mediated?: boolean;
+  /** How mediation was determined. Absent payloads fall back to the heuristic. */
+  mediation_source?: MediationSource;
   producer_interface: IntegrationInterfaceRef | null;
   consumer_interface: IntegrationInterfaceRef | null;
   has_request_graph: boolean;
@@ -166,6 +221,13 @@ export type IntegrationContractSummary = {
   target_fields_mapped: number;
   target_fields_total: number;
   scenario_count: number;
+  /** Evidence count for the selected state; evidence never becomes a graph node. */
+  evidence_count?: number;
+  /** Physical Catalog objects this Contract references, for Landscape filters. */
+  referenced_information_objects?: IntegrationInformationRef[];
+  lifecycle_stage: IntegrationFactValue;
+  operational_status: IntegrationFactValue;
+  environment_scope: IntegrationFactValue;
 };
 
 export type IntegrationLandscape = {
@@ -291,19 +353,85 @@ export function emptySpec(): IntegrationOperatingSpec {
   };
 }
 
+function normalizeFact(raw: Partial<IntegrationFactValue> | null | undefined): IntegrationFactValue {
+  return {
+    value: raw?.value ?? null,
+    canonical: raw?.canonical ?? null,
+    override: raw?.override ?? null,
+    overridden: Boolean(raw?.overridden),
+  };
+}
+
 function normalizeContract(raw: IntegrationContractSummary): IntegrationContractSummary {
   return {
     ...raw,
     pattern: raw?.pattern ?? null,
     implementation_status: raw?.implementation_status ?? "draft",
     status: raw?.status ?? "draft",
+    mediator: raw?.mediator ?? null,
     producer_interface: raw?.producer_interface ?? null,
     consumer_interface: raw?.consumer_interface ?? null,
     specification: raw?.specification ?? {},
     target_fields_mapped: raw?.target_fields_mapped ?? 0,
     target_fields_total: raw?.target_fields_total ?? 0,
     scenario_count: raw?.scenario_count ?? 0,
+    referenced_information_objects: (raw?.referenced_information_objects ?? []).map((item) => ({
+      object_id: item.object_id,
+      name: item.name,
+      label: item.label,
+      system_id: item.system_id ?? null,
+      system_name: item.system_name ?? null,
+      anchors: item.anchors ?? [],
+    })),
+    lifecycle_stage: normalizeFact(raw?.lifecycle_stage),
+    operational_status: normalizeFact(raw?.operational_status),
+    environment_scope: normalizeFact(raw?.environment_scope),
   };
+}
+
+export type ContractMediation = {
+  source: MediationSource;
+  mediated: boolean;
+  explicit: boolean;
+  mediator: IntegrationMediatorRef | null;
+};
+
+/**
+ * Reconciles a contract's mediation. The projection is authoritative when it is
+ * present; a payload without it (older data or a local fixture) falls back to the
+ * legacy runtime-endpoint heuristic, so heuristic-mediated contracts keep
+ * rendering exactly as they did before.
+ */
+export function contractMediation(contract: IntegrationContractSummary): ContractMediation {
+  const declared = contract.mediation_source;
+  if (declared === "explicit" && contract.mediator) {
+    return { source: "explicit", mediated: true, explicit: true, mediator: contract.mediator };
+  }
+  if (declared === "none") {
+    return { source: "none", mediated: false, explicit: false, mediator: null };
+  }
+  const runtimeEndpoint = [contract.source, contract.target].find((item) => item?.is_runtime);
+  if (declared === "legacy_endpoint_heuristic" || runtimeEndpoint) {
+    const mediator =
+      contract.mediator ??
+      (runtimeEndpoint
+        ? {
+            system_id: runtimeEndpoint.system_id,
+            system_name: runtimeEndpoint.system_name,
+            system_kind: runtimeEndpoint.system_kind ?? null,
+            is_runtime: true,
+            responsibility: null,
+            explicit: false,
+          }
+        : null);
+    return {
+      source: "legacy_endpoint_heuristic",
+      mediated: true,
+      explicit: false,
+      mediator,
+    };
+  }
+  return { source: "none", mediated: false, explicit: false, mediator: null };
 }
 
 function normalizePhase(raw: IntegrationFlowPhase): IntegrationFlowPhase {

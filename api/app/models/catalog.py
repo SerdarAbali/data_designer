@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -16,6 +17,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.architecture.vocabulary import (
+    ENVIRONMENT_SCOPES,
+    LIFECYCLE_STAGES,
+    OPERATIONAL_STATUSES,
+    sql_in_list,
+)
 from app.db import Base
 
 json_type = JSON().with_variant(JSONB(), "postgresql")
@@ -45,6 +52,18 @@ class CatalogSystem(Base):
             postgresql_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
             sqlite_where=text("deleted_at IS NULL AND external_identifier IS NOT NULL"),
         ),
+        CheckConstraint(
+            f"lifecycle_stage IN {sql_in_list(LIFECYCLE_STAGES)}",
+            name="ck_systems_lifecycle_stage",
+        ),
+        CheckConstraint(
+            f"operational_status IN {sql_in_list(OPERATIONAL_STATUSES)}",
+            name="ck_systems_operational_status",
+        ),
+        CheckConstraint(
+            f"environment_scope IN {sql_in_list(ENVIRONMENT_SCOPES)}",
+            name="ck_systems_environment_scope",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -60,6 +79,11 @@ class CatalogSystem(Base):
 
     position: Mapped[dict | None] = mapped_column(json_type)
     binding_state: Mapped[str] = mapped_column(String(100), nullable=False, default="unbound")
+    # Generic lifecycle/operational/environment facts. ``None`` means "not
+    # specified" and is never coerced into a concrete value.
+    lifecycle_stage: Mapped[str | None] = mapped_column(String(32))
+    operational_status: Mapped[str | None] = mapped_column(String(32))
+    environment_scope: Mapped[str | None] = mapped_column(String(32))
     extra_metadata: Mapped[dict] = mapped_column(
         "metadata", json_type, nullable=False, default=dict
     )

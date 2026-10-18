@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { MarkerType, type Connection, type Viewport } from "@xyflow/react";
 
 import type { ArchitectureState } from "../architectureTypes";
+import { useHoverFocus } from "../components/architecture/useHoverFocus";
 import type { SolutionDesign } from "./solutionModel";
 import { contextGraph, type Point } from "./solutionCanvasModel";
 import SolutionCanvas from "./SolutionCanvas";
@@ -40,6 +41,12 @@ export default function SolutionContextView({
   toolbar,
 }: Props) {
   const graph = useMemo(() => contextGraph(design, state), [design, state]);
+  const focusableEdges = useMemo(
+    () => graph.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+    [graph.edges],
+  );
+  const hover = useHoverFocus(focusableEdges);
+  const focus = hover.focus;
 
   const nodes = useMemo<ContextFlowNode[]>(() => {
     const boundary: SolutionBoundaryFlowNode = {
@@ -62,6 +69,7 @@ export default function SolutionContextView({
       position: system.position,
       draggable: editable && Boolean(system.occurrenceId),
       selected: system.systemId === selectedSystemId,
+      className: focus && !focus.nodes.has(system.key) ? "dimmed" : undefined,
       data: {
         name: system.name,
         kind: system.kind,
@@ -71,7 +79,7 @@ export default function SolutionContextView({
       },
     }));
     return [boundary, ...systems];
-  }, [graph, editable, selectedSystemId, design.solution.solution_object_id]);
+  }, [graph, focus, editable, selectedSystemId, design.solution.solution_object_id]);
 
   const edges = useMemo<SolutionFlowEdge[]>(
     () =>
@@ -83,9 +91,16 @@ export default function SolutionContextView({
         targetHandle: edge.targetHandle ?? undefined,
         type: "solutionEdge" as const,
         markerEnd: { type: MarkerType.ArrowClosed },
-        data: { kind: edge.kind, label: edge.label, sourceOffset: edge.sourceOffset, targetOffset: edge.targetOffset },
+        data: {
+          kind: edge.kind,
+          label: edge.label,
+          sourceOffset: edge.sourceOffset,
+          targetOffset: edge.targetOffset,
+          emphasized: hover.target.edge === edge.id,
+          dimmed: focus ? !focus.edges.has(edge.id) : false,
+        },
       })),
-    [graph.edges],
+    [graph.edges, focus, hover.target.edge],
   );
 
   return (
@@ -110,6 +125,10 @@ export default function SolutionContextView({
         onMoveSystem(node.id, { x: node.position.x, y: node.position.y });
       }}
       onPaneClick={onSelectSolution}
+      onNodeMouseEnter={hover.onNodeEnter}
+      onNodeMouseLeave={hover.onLeave}
+      onEdgeMouseEnter={hover.onEdgeEnter}
+      onEdgeMouseLeave={hover.onLeave}
       onConnect={(_connection: Connection) => undefined}
       emptyState={
         <>

@@ -137,9 +137,62 @@ export function lineageLayout(lineage: InformationLineage): Map<string, Informat
     lineage.nodes.map((node) => node.id),
     lineage.edges.map((edge) => ({ source: edge.source, target: edge.target })),
     "ltr",
-    280,
-    120,
+    LINEAGE_COLUMN_GAP,
+    LINEAGE_ROW_GAP,
   );
+}
+
+/**
+ * Column and row spacing for the lineage. Connectors bend inside the corridor
+ * between two columns, so the corridor has to be wide enough to hold one lane
+ * per connector plus the relationship labels that sit on them.
+ */
+export const LINEAGE_COLUMN_GAP = 440;
+export const LINEAGE_ROW_GAP = 160;
+
+/** Horizontal spacing between two connectors that share a corridor. */
+export const PROJECTION_LANE_SPACING = 9;
+
+/** Furthest a connector may be pushed from its own column edge. */
+const PROJECTION_LANE_LIMIT = 78;
+
+/**
+ * Assigns every connector a lane inside its corridor. Without this, each
+ * connector bends at the same distance from its source node, so all the jogs in
+ * a corridor land on one line and the graph becomes unreadable. Lanes are
+ * deterministic: ordered by source row, then target row, then id.
+ */
+export function assignProjectionLanes(
+  positions: Map<string, InformationLayoutPoint>,
+  edges: { id: string; source: string; target: string }[],
+): Map<string, number> {
+  const corridors = new Map<number, { id: string; source: string; target: string }[]>();
+  for (const edge of edges) {
+    const source = positions.get(edge.source);
+    if (!source) continue;
+    const list = corridors.get(source.x) ?? [];
+    list.push(edge);
+    corridors.set(source.x, list);
+  }
+  const lanes = new Map<string, number>();
+  for (const list of corridors.values()) {
+    const ordered = [...list].sort((a, b) => {
+      const aSource = positions.get(a.source);
+      const bSource = positions.get(b.source);
+      const bySource = (aSource?.y ?? 0) - (bSource?.y ?? 0);
+      if (bySource !== 0) return bySource;
+      const byTarget = (positions.get(a.target)?.y ?? 0) - (positions.get(b.target)?.y ?? 0);
+      return byTarget !== 0 ? byTarget : a.id.localeCompare(b.id);
+    });
+    ordered.forEach((edge, index) => {
+      const offset = (index - (ordered.length - 1) / 2) * PROJECTION_LANE_SPACING;
+      lanes.set(
+        edge.id,
+        Math.max(-PROJECTION_LANE_LIMIT, Math.min(PROJECTION_LANE_LIMIT, offset)),
+      );
+    });
+  }
+  return lanes;
 }
 
 function push(map: Map<string, string[]>, key: string, value: string): void {

@@ -18,6 +18,7 @@ import SolutionContextEditor from "./SolutionContextEditor";
 import { solutionLog } from "./solutionLog";
 import {
   addSolutionMember,
+  fetchSolutionLandscape,
   createComponent,
   createDeploymentNode,
   createInterface,
@@ -48,9 +49,12 @@ import {
   updateTrustBoundary,
   type SolutionDesign,
   type SolutionOperation,
+  type SolutionLandscape,
   type SolutionSummary,
 } from "./solutionModel";
 import SolutionContextView from "./SolutionContextView";
+import SolutionLandscapeInspector from "./SolutionLandscapeInspector";
+import SolutionLandscapeView from "./SolutionLandscapeView";
 import SolutionDecompositionView from "./SolutionDecompositionView";
 import SolutionDeploymentView from "./SolutionDeploymentView";
 import SolutionInteractionView from "./SolutionInteractionView";
@@ -68,9 +72,16 @@ type Props = {
   onReloadStates?: () => void;
   onOpenCatalog?: () => void;
   onNavigateTrace?: (node: TraceObjectRef) => void;
+  onOpenIntegration?: (integrationId: string) => void;
 };
 
-type View = "context" | "decomposition" | "deployment" | "trust" | "interaction";
+type View =
+  | "landscape"
+  | "context"
+  | "decomposition"
+  | "deployment"
+  | "trust"
+  | "interaction";
 
 type CatalogSystem = { id: string; name: string; kind: string };
 
@@ -84,6 +95,7 @@ type Selection =
   | { kind: "trust"; trustId: string };
 
 const VIEWS: { id: View; label: string }[] = [
+  { id: "landscape", label: "Landscape" },
   { id: "context", label: "Context" },
   { id: "decomposition", label: "Decomposition" },
   { id: "deployment", label: "Deployment" },
@@ -101,6 +113,7 @@ export default function SolutionWorkbench({
   onReloadStates,
   onOpenCatalog,
   onNavigateTrace,
+  onOpenIntegration,
 }: Props) {
   const stateId = activeState?.id ?? "";
   const stateType = activeState?.state_type ?? "current";
@@ -110,6 +123,11 @@ export default function SolutionWorkbench({
   const [selectedSolutionId, setSelectedSolutionId] = useState<string | null>(null);
   const [design, setDesign] = useState<SolutionDesign | null>(null);
   const [view, setView] = useState<View>("context");
+  const [landscape, setLandscape] = useState<SolutionLandscape | null>(null);
+  const [landscapeLoading, setLandscapeLoading] = useState(false);
+  const [landscapeKey, setLandscapeKey] = useState(0);
+  const [landscapeNodeId, setLandscapeNodeId] = useState<string | null>(null);
+  const [landscapeEdgeId, setLandscapeEdgeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -121,7 +139,27 @@ export default function SolutionWorkbench({
   const viewportRef = useRef<Record<string, Viewport>>({});
   const viewportKey = `${selectedSolutionId ?? ""}:${view}`;
 
-  const isEditable = editable && design?.state_type !== "current";
+  const isEditable = editable && design?.editable === true;
+  const landscapeEditable = editable && landscape?.editable === true;
+
+  const reloadLandscape = useCallback(async () => {
+    if (!workspaceId || !stateId) {
+      setLandscape(null);
+      return;
+    }
+    setLandscapeLoading(true);
+    try {
+      setLandscape(await fetchSolutionLandscape(workspaceId, stateId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load the solution landscape.");
+    } finally {
+      setLandscapeLoading(false);
+    }
+  }, [workspaceId, stateId]);
+
+  useEffect(() => {
+    void reloadLandscape();
+  }, [reloadLandscape, landscapeKey]);
 
   const reloadList = useCallback(async () => {
     if (!workspaceId || !stateId) {
@@ -167,6 +205,22 @@ export default function SolutionWorkbench({
     setInspectorCollapsed(false);
     void reloadDesign(selectedSolutionId);
   }, [reloadDesign, selectedSolutionId]);
+
+  // A state change never carries the previous state's Landscape selection over,
+  // but it does preserve the selected architecture state itself.
+  useEffect(() => {
+    setLandscapeNodeId(null);
+    setLandscapeEdgeId(null);
+  }, [stateId]);
+
+  const openSolutionFromLandscape = useCallback((solutionObjectId: string) => {
+    setSelectedSolutionId(solutionObjectId);
+    setLandscapeNodeId(solutionObjectId);
+    setLandscapeEdgeId(null);
+    setView("context");
+    setSelection({ kind: "solution" });
+    setInspectorCollapsed(false);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -544,10 +598,7 @@ export default function SolutionWorkbench({
             Auto arrange
           </button>
         )}
-        <span className="solution-toolbar-hint">
-          {isEditable ? "Model components, interfaces, operations and their links." : "Current state is read-only. Duplicate it to model changes."}
-        </span>
-        {onOpenCatalog && <button type="button" className="secondary-button" onClick={onOpenCatalog}>Open catalog</button>}
+        {onOpenCatalog && <button type="button" className="btn btn--secondary" onClick={onOpenCatalog}>Open catalog</button>}
       </div>
 
       {error && (
@@ -573,8 +624,45 @@ export default function SolutionWorkbench({
           ))}
         </nav>
 
-        <div className={`solution-content${view === "context" || view === "decomposition" ? " solution-content-canvas" : ""}`}>
-          {loading && !design ? (
+        <div className={`solution-content${view === "landscape" || view === "context" || view === "decomposition" ? " solution-content-canvas" : ""}`}>
+          {view === "landscape" ? (
+            landscapeLoading && !landscape ? (
+              <div className="landscape-empty" role="status">Loading solution landscape…</div>
+            ) : !landscape ? (
+              <div className="landscape-empty">
+                <span className="empty-icon">◇</span>
+                <h3>No solution landscape available</h3>
+                <p>Duplicate the current state into a candidate to model solutions.</p>
+              </div>
+            ) : (
+              <SolutionLandscapeView
+                key={stateId}
+                landscape={landscape}
+                stateName={activeState?.name ?? ""}
+                selectedNodeId={landscapeNodeId}
+                selectedEdgeId={landscapeEdgeId}
+                onSelectNode={(solutionObjectId) => {
+                  setLandscapeNodeId(solutionObjectId || null);
+                  setLandscapeEdgeId(null);
+                  setInspectorCollapsed(false);
+                }}
+                onSelectEdge={(relationshipId) => {
+                  setLandscapeEdgeId(relationshipId);
+                  setLandscapeNodeId(null);
+                  setInspectorCollapsed(false);
+                }}
+                onOpenSolution={openSolutionFromLandscape}
+                toolbar={
+                  <span className="solution-canvas-legend">
+                    {landscape.solutions.length} solution
+                    {landscape.solutions.length === 1 ? "" : "s"} ·{" "}
+                    {landscape.relationships.length} relationship
+                    {landscape.relationships.length === 1 ? "" : "s"}
+                  </span>
+                }
+              />
+            )
+          ) : loading && !design ? (
             <div className="landscape-empty" role="status">Loading solution design…</div>
           ) : !design ? (
             <div className="landscape-empty">
@@ -671,7 +759,37 @@ export default function SolutionWorkbench({
           <button type="button" className="studio-reopen-inspector" onClick={() => setInspectorCollapsed(false)}>Open inspector</button>
         )}
 
-        {!inspectorCollapsed && design && selection.kind === "solution" && (
+        {!inspectorCollapsed && view === "landscape" && landscape && (
+          <SolutionLandscapeInspector
+            landscape={landscape}
+            workspaceId={workspaceId}
+            stateId={stateId}
+            stateName={activeState?.name ?? ""}
+            selectedNodeId={landscapeNodeId}
+            selectedEdgeId={landscapeEdgeId}
+            busy={busy || landscapeLoading}
+            onSelectNode={(solutionObjectId) => {
+              setLandscapeNodeId(solutionObjectId || null);
+              setLandscapeEdgeId(null);
+            }}
+            onSelectEdge={(relationshipId) => {
+              setLandscapeEdgeId(relationshipId);
+              setLandscapeNodeId(null);
+            }}
+            onOpenSolution={openSolutionFromLandscape}
+            onOpenContract={(contractId) => onOpenIntegration?.(contractId)}
+            onChanged={() => setLandscapeKey((current) => current + 1)}
+            onClose={() => setInspectorCollapsed(true)}
+            onCollapse={() => setInspectorCollapsed(true)}
+            trace={
+              landscapeNodeId
+                ? tracePanel(landscapeNodeId)
+                : <p className="muted">Select a solution to see its traceability.</p>
+            }
+          />
+        )}
+
+        {!inspectorCollapsed && view !== "landscape" && design && selection.kind === "solution" && (
           <SolutionContextEditor
             design={design}
             systems={systems}
@@ -687,6 +805,9 @@ export default function SolutionWorkbench({
             onClose={() => setInspectorCollapsed(true)}
             onCollapse={() => setInspectorCollapsed(true)}
             trace={tracePanel(design.solution.solution_object_id)}
+            workspaceId={workspaceId}
+            stateId={stateId}
+            onOpenContract={onOpenIntegration}
           />
         )}
 

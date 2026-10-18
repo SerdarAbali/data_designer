@@ -84,6 +84,108 @@ def test_dynamic_discipline_scoping() -> None:
     assert "architecture_get_workspace_context" in without_integration
 
 
+SHARED_READ_TOOLS = {
+    "architecture_get_workspace_context",
+    "architecture_get_enabled_disciplines",
+    "architecture_get_architecture_state",
+    "architecture_search_canonical_objects",
+    "architecture_get_object_details",
+    "architecture_get_object_relationships",
+    "architecture_get_object_usages",
+    "architecture_trace_architecture_path",
+    "architecture_compare_current_candidate",
+    "architecture_list_catalog_systems",
+    "architecture_inspect_catalog_schema",
+}
+
+
+def test_tool_scope_for_each_discipline_combination() -> None:
+    integration_only = set(tools.allowed_tool_names(["integration"], "candidate"))
+    solution_only = set(tools.allowed_tool_names(["solution"], "candidate"))
+    solution_integration = set(tools.allowed_tool_names(["solution", "integration"], "candidate"))
+    enterprise_only = set(tools.allowed_tool_names(["enterprise"], "candidate"))
+    information_only = set(tools.allowed_tool_names(["information"], "candidate"))
+    full = set(tools.allowed_tool_names(ALL_DISCIPLINES, "candidate"))
+
+    # Shared read surface is always present.
+    for scope in (
+        integration_only,
+        solution_only,
+        solution_integration,
+        enterprise_only,
+        information_only,
+        full,
+    ):
+        assert SHARED_READ_TOOLS <= scope
+
+    # Integration only: contract, mapping and scenario tools, no solution tools.
+    for name in (
+        "architecture_inspect_contract",
+        "architecture_inspect_mapping_coverage",
+        "architecture_inspect_scenarios_and_conformance",
+        "architecture_propose_contract",
+        "architecture_propose_field_mappings",
+        "architecture_propose_transformations",
+        "architecture_propose_scenarios",
+        "architecture_propose_conformance_tests",
+    ):
+        assert name in integration_only
+    assert "architecture_propose_solution_structure" not in integration_only
+    assert "architecture_propose_information_entity" not in integration_only
+
+    # Solution only: solution tools plus shared Catalog, no contract tools.
+    assert "architecture_propose_solution_structure" in solution_only
+    assert "architecture_propose_solution_component" in solution_only
+    assert "architecture_list_catalog_systems" in solution_only
+    assert "architecture_inspect_catalog_schema" in solution_only
+    assert "architecture_inspect_contract" not in solution_only
+    assert "architecture_propose_contract" not in solution_only
+
+    # Solution + Integration: union of both scopes plus the composite helper.
+    assert "architecture_propose_solution_structure" in solution_integration
+    assert "architecture_propose_contract" in solution_integration
+    assert (solution_only | integration_only) <= solution_integration
+    assert "architecture_propose_end_to_end_architecture" in solution_integration
+
+    # Enterprise and Information follow the same rule.
+    assert "architecture_propose_strategy_chain" in enterprise_only
+    assert "architecture_propose_solution_structure" not in enterprise_only
+    assert "architecture_propose_information_entity" in information_only
+    assert "architecture_propose_contract" not in information_only
+
+    # Full Architecture exposes the complete candidate toolset.
+    assert full == set(tools.all_tool_names())
+
+
+def test_tool_manifest_matches_scope_for_every_combination() -> None:
+    for disciplines in (
+        ["integration"],
+        ["solution"],
+        ["solution", "integration"],
+        ["enterprise"],
+        ["information"],
+        ALL_DISCIPLINES,
+    ):
+        manifest = tools.tool_manifest(disciplines, "candidate")
+        assert {entry["name"] for entry in manifest} == set(
+            tools.allowed_tool_names(disciplines, "candidate")
+        )
+
+
+def test_current_state_is_read_only_for_every_combination() -> None:
+    for disciplines in (
+        ["integration"],
+        ["solution"],
+        ["solution", "integration"],
+        ["enterprise"],
+        ["information"],
+        ALL_DISCIPLINES,
+    ):
+        names = set(tools.allowed_tool_names(disciplines, "current"))
+        assert not any("propose" in name for name in names)
+        assert SHARED_READ_TOOLS <= names
+
+
 def test_dispatch_rejects_unknown_tool(assistant_env) -> None:
     conversation_id = _create_conversation(assistant_env)
     with assistant_env.sessions() as db:

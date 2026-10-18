@@ -13,25 +13,42 @@ awareness, but the underlying contracts remain tenant-scoped canonical records.
 
 import logging
 from collections import defaultdict
+from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.architecture.evidence import evidence_count, evidence_counts_by_target
 from app.architecture.routes import get_accessible_workspace
-from app.auth.dependencies import AuthenticatedUser, get_current_user
+from app.architecture.state_scope import assert_writable, state_is_editable
+from app.auth.dependencies import (
+    AuthenticatedUser,
+    get_auth_session,
+    get_current_user,
+    require_csrf,
+)
 from app.db import get_session
+from app.integrations.facts import effective_facts, override_for_contract, overrides_for_state
 from app.integrations.graph import GraphDocument
+from app.integrations.mediation import (
+    endpoint_ref,
+    is_runtime_system,
+    resolve_mediation,
+)
 from app.integrations.schemas import (
     IntegrationConformanceResponse,
     IntegrationContractDetail,
     IntegrationContractSummary,
     IntegrationCoverage,
     IntegrationEndpointRef,
+    IntegrationFactsResponse,
+    IntegrationFactValue,
     IntegrationFlowPhase,
     IntegrationFlowTransformation,
+    IntegrationInformationRef,
     IntegrationInterfaceRef,
     IntegrationInterfaceSummary,
     IntegrationLandscapeResponse,
@@ -42,15 +59,18 @@ from app.integrations.schemas import (
     IntegrationSequenceInteraction,
     IntegrationSequenceParticipant,
     IntegrationSequenceResponse,
+    IntegrationStateOverrideWrite,
 )
 from app.models import (
     ArchitectureInterface,
     ArchitectureState,
+    AuthSession,
     CatalogField,
     CatalogObject,
     CatalogSystem,
     Integration,
     IntegrationFieldRef,
+    IntegrationStateOverride,
     InterfaceOperation,
     Scenario,
     SolutionComponent,
@@ -81,7 +101,8 @@ TARGET_DIRECTIONS = {
 
 # A system counts as an integration runtime only when the modelled data proves it:
 # its catalog kind is an explicit runtime kind, or its name names a runtime.
-RUNTIME_SYSTEM_KINDS = {"integration_runtime", "integration_runtime_platform", "esb", "runtime"}
+# (Shared with the mediation resolver so the projection and the resolver can
+# never drift.)
 EVENT_PATTERNS = {"publish_subscribe", "event_streaming", "message_queue"}
 FILE_PATTERNS = {"file_transfer", "batch"}
 API_PATTERNS = {"request_reply", "api_gateway", "orchestration", "point_to_point"}
@@ -90,11 +111,7 @@ FLOW_ROLE_BY_NODE = {"validate": "validation", "ifelse": "routing", "constant": 
 
 
 def _is_runtime_system(system: CatalogSystem | None) -> bool:
-    if system is None:
-        return False
-    if (system.kind or "").strip().lower() in RUNTIME_SYSTEM_KINDS:
-        return True
-    return "runtime" in (system.name or "").strip().lower()
+    return is_runtime_system(system)
 
 
 def _channel(
@@ -273,6 +290,85 @@ def _field_refs_by_integration(
     return grouped
 
 
+def _object_anchors_by_integration(
+    db: Session, workspace: Workspace
+) -> dict[UUID, dict[UUID, set[str]]]:
+    """Which physical Catalog objects each Contract references, and where.
+
+    One bulk query for the whole workspace, so the Landscape projection never
+    issues a query per Contract. The anchors are the ``IntegrationFieldRef``
+    directions, i.e. objective evidence of the reference rather than a name
+    heuristic.
+    """
+    grouped: dict[UUID, dict[UUID, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for integration_id, object_id, direction in db.execute(
+        select(
+            IntegrationFieldRef.integration_id,
+            IntegrationFieldRef.object_id,
+            IntegrationFieldRef.direction,
+        ).where(IntegrationFieldRef.tenant_id == workspace.tenant_id)
+    ):
+        grouped[integration_id][object_id].add(direction)
+    return grouped
+
+
+def _information_refs(
+    anchors: dict[UUID, set[str]] | None,
+    systems: dict[UUID, CatalogSystem],
+    objects: dict[UUID, CatalogObject],
+) -> list[IntegrationInformationRef]:
+    """Stable, deterministically ordered information references for one Contract."""
+    if not anchors:
+        return []
+    refs: list[IntegrationInformationRef] = []
+    for object_id, directions in anchors.items():
+        obj = objects.get(object_id)
+        if obj is None:
+            # The Catalog object is archived or otherwise unavailable: the field
+            # ref still exists, so expose the stable id without inventing a name.
+            refs.append(
+                IntegrationInformationRef(
+                    object_id=object_id,
+                    name="(unavailable Catalog object)",
+                    label="Unavailable Catalog object",
+                    anchors=sorted(directions),
+                )
+            )
+            continue
+        system = systems.get(obj.system_id)
+        refs.append(
+            IntegrationInformationRef(
+                object_id=obj.id,
+                name=obj.name,
+                label=obj.label,
+                system_id=obj.system_id,
+                system_name=system.name if system else None,
+                anchors=sorted(directions),
+            )
+        )
+    refs.sort(key=lambda item: ((item.label or item.name).casefold(), str(item.object_id)))
+    return refs
+
+
+def _active_field_names_by_object(
+    db: Session, workspace: Workspace
+) -> dict[UUID, dict[UUID, str]]:
+    """Active fields for every Catalog object in one query.
+
+    The Landscape projection uses this instead of resolving fields per Contract,
+    so the request cost does not grow with the number of Contracts.
+    """
+    grouped: dict[UUID, dict[UUID, str]] = defaultdict(dict)
+    for field in db.scalars(
+        select(CatalogField).where(
+            CatalogField.tenant_id == workspace.tenant_id,
+            CatalogField.deleted_at.is_(None),
+        )
+    ):
+        grouped[field.object_id][field.id] = field.name
+    return grouped
+
+
 def _active_field_names(db: Session, workspace: Workspace, object_id: UUID) -> dict[UUID, str]:
     return {
         field.id: field.name
@@ -318,6 +414,15 @@ def _endpoint(
     )
 
 
+def _endpoint(
+    systems: dict[UUID, CatalogSystem],
+    objects: dict[UUID, CatalogObject],
+    system_id: UUID,
+    object_id: UUID,
+) -> IntegrationEndpointRef:
+    return endpoint_ref(systems, objects, system_id, object_id)
+
+
 def _contract_status(integration: Integration, mapped: int) -> str:
     base = integration.implementation_status or "draft"
     if base in ("built", "verified") and mapped == 0:
@@ -330,6 +435,7 @@ def _resolve_idempotency_key_name(
     workspace: Workspace,
     integration: Integration,
     specification: dict,
+    fields_by_object: dict[UUID, dict[UUID, str]] | None = None,
 ) -> str | None:
     """Human-readable name for the configured idempotency key field.
 
@@ -349,7 +455,10 @@ def _resolve_idempotency_key_name(
     for object_id in (integration.source_object_id, integration.target_object_id):
         if object_id is None:
             continue
-        name = _active_field_names(db, workspace, object_id).get(field_id)
+        if fields_by_object is not None:
+            name = fields_by_object.get(object_id, {}).get(field_id)
+        else:
+            name = _active_field_names(db, workspace, object_id).get(field_id)
         if name:
             return name
     return None
@@ -365,13 +474,28 @@ def _contract_summary(
     interfaces: dict[UUID, ArchitectureInterface],
     refs: dict[str, set[UUID]],
     scenario_counts: dict[UUID, int],
+    override: IntegrationStateOverride | None = None,
+    evidence_counts: dict[UUID, int] | None = None,
+    object_anchors: dict[UUID, set[str]] | None = None,
+    fields_by_object: dict[UUID, dict[UUID, str]] | None = None,
 ) -> IntegrationContractSummary:
-    target_fields = _active_field_names(db, workspace, integration.target_object_id)
+    if fields_by_object is None:
+        target_fields = _active_field_names(db, workspace, integration.target_object_id)
+    else:
+        target_fields = fields_by_object.get(integration.target_object_id, {})
     mapped = refs.get("target", set()) & set(target_fields)
     specification = integration.specification or {}
     idempotency_key_field_name = _resolve_idempotency_key_name(
-        db, workspace, integration, specification
+        db, workspace, integration, specification, fields_by_object
     )
+    facts = effective_facts(integration, override)
+    source_endpoint = _endpoint(
+        systems, objects, integration.source_system_id, integration.source_object_id
+    )
+    target_endpoint = _endpoint(
+        systems, objects, integration.target_system_id, integration.target_object_id
+    )
+    mediation = resolve_mediation(integration, systems, source_endpoint, target_endpoint)
     return IntegrationContractSummary(
         id=integration.id,
         name=integration.name,
@@ -382,12 +506,12 @@ def _contract_summary(
         revision=integration.revision,
         updated_at=integration.updated_at.isoformat() if integration.updated_at else None,
         status=_contract_status(integration, len(mapped)),
-        source=_endpoint(
-            systems, objects, integration.source_system_id, integration.source_object_id
-        ),
-        target=_endpoint(
-            systems, objects, integration.target_system_id, integration.target_object_id
-        ),
+        source=source_endpoint,
+        target=target_endpoint,
+        mediator=mediation.mediator,
+        explicit_mediator=mediation.explicit_mediator,
+        mediated=mediation.mediated,
+        mediation_source=mediation.source,
         producer_interface=_interface_ref(interfaces, integration.producer_interface_id),
         consumer_interface=_interface_ref(interfaces, integration.consumer_interface_id),
         has_request_graph=bool((integration.graph or {}).get("nodes")),
@@ -398,6 +522,11 @@ def _contract_summary(
         target_fields_mapped=len(mapped),
         target_fields_total=len(target_fields),
         scenario_count=scenario_counts.get(integration.id, 0),
+        evidence_count=(evidence_counts or {}).get(integration.id, 0),
+        referenced_information_objects=_information_refs(object_anchors, systems, objects),
+        lifecycle_stage=IntegrationFactValue(**facts["lifecycle_stage"]),
+        operational_status=IntegrationFactValue(**facts["operational_status"]),
+        environment_scope=IntegrationFactValue(**facts["environment_scope"]),
     )
 
 
@@ -636,8 +765,14 @@ def integration_landscape(
     operations = _operations_by_interface(db, workspace)
     components = _component_names(db, workspace)
     refs_by_integration = _field_refs_by_integration(db, workspace)
+    anchors_by_integration = _object_anchors_by_integration(db, workspace)
+    fields_by_object = _active_field_names_by_object(db, workspace)
     integrations = _active_integrations(db, workspace)
     scenario_counts = _scenario_counts(db, workspace, integrations)
+    contract_overrides = overrides_for_state(db, workspace.tenant_id, state.id)
+    condition_evidence_counts = evidence_counts_by_target(
+        db, workspace.tenant_id, "integration", state.id
+    )
 
     contract_ids_by_interface: dict[UUID, list[UUID]] = defaultdict(list)
     for integration in integrations:
@@ -658,6 +793,10 @@ def integration_landscape(
             interfaces=interfaces,
             refs=refs_by_integration.get(integration.id, {}),
             scenario_counts=scenario_counts,
+            override=contract_overrides.get(integration.id),
+            evidence_counts=condition_evidence_counts,
+            object_anchors=anchors_by_integration.get(integration.id),
+            fields_by_object=fields_by_object,
         )
         for integration in integrations
     ]
@@ -678,7 +817,7 @@ def integration_landscape(
     return IntegrationLandscapeResponse(
         state_id=state.id,
         state_type=state.state_type,
-        editable=state.state_type != "current",
+        editable=state_is_editable(state),
         contracts=contracts,
         interfaces=interface_summaries,
     )
@@ -697,7 +836,7 @@ def integration_contract_detail(
 ) -> IntegrationContractDetail:
     workspace = get_accessible_workspace(db, user, workspace_id)
     _require_integration(workspace)
-    _get_state(db, workspace, state_id)
+    state = _get_state(db, workspace, state_id)
     integration = _get_integration(db, workspace, integration_id)
 
     systems = {
@@ -722,6 +861,7 @@ def integration_contract_detail(
     operations = _operations_by_interface(db, workspace)
     components = _component_names(db, workspace)
     refs = _field_refs_by_integration(db, workspace).get(integration.id, {})
+    object_anchors = _object_anchors_by_integration(db, workspace).get(integration.id)
     scenario_counts = _scenario_counts(db, workspace, [integration])
 
     contract = _contract_summary(
@@ -733,6 +873,13 @@ def integration_contract_detail(
         interfaces=interfaces,
         refs=refs,
         scenario_counts=scenario_counts,
+        override=override_for_contract(db, workspace.tenant_id, state.id, integration.id),
+        evidence_counts={
+            integration.id: evidence_count(
+                db, workspace.tenant_id, "integration", integration.id, state.id
+            )
+        },
+        object_anchors=object_anchors,
     )
     contract_ids_by_interface: dict[UUID, list[UUID]] = defaultdict(list)
     for interface_id in (integration.producer_interface_id, integration.consumer_interface_id):
@@ -759,6 +906,97 @@ def integration_contract_detail(
     )
 
 
+def _facts_response(
+    state: ArchitectureState,
+    integration: Integration,
+    override: IntegrationStateOverride | None,
+) -> IntegrationFactsResponse:
+    facts = effective_facts(integration, override)
+    return IntegrationFactsResponse(
+        integration_id=integration.id,
+        state_id=state.id,
+        state_type=state.state_type,
+        editable=state_is_editable(state),
+        lifecycle_stage=IntegrationFactValue(**facts["lifecycle_stage"]),
+        operational_status=IntegrationFactValue(**facts["operational_status"]),
+        environment_scope=IntegrationFactValue(**facts["environment_scope"]),
+        updated_at=(
+            override.updated_at.isoformat()
+            if override is not None and override.updated_at is not None
+            else None
+        ),
+    )
+
+
+@router.get(
+    "/contracts/{integration_id}/facts",
+    response_model=IntegrationFactsResponse,
+)
+def integration_contract_facts(
+    workspace_id: UUID,
+    integration_id: UUID,
+    state_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> IntegrationFactsResponse:
+    """Effective lifecycle/operational/environment facts for a contract and state."""
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_integration(workspace)
+    state = _get_state(db, workspace, state_id)
+    integration = _get_integration(db, workspace, integration_id)
+    override = override_for_contract(db, workspace.tenant_id, state.id, integration.id)
+    return _facts_response(state, integration, override)
+
+
+@router.put(
+    "/contracts/{integration_id}/facts",
+    response_model=IntegrationFactsResponse,
+)
+def update_integration_contract_facts(
+    workspace_id: UUID,
+    integration_id: UUID,
+    payload: IntegrationStateOverrideWrite,
+    request: Request,
+    auth_session: AuthSession = Depends(get_auth_session),  # noqa: B008
+    user: AuthenticatedUser = Depends(get_current_user),  # noqa: B008
+    db: Session = Depends(get_session),  # noqa: B008
+) -> IntegrationFactsResponse:
+    """Upsert the bounded, state-specific generic facts for a contract.
+
+    Only non-current states accept overrides; Current keeps its existing
+    read-only semantics. The canonical ``integrations`` row is never touched.
+    """
+    require_csrf(request, auth_session)
+    workspace = get_accessible_workspace(db, user, workspace_id)
+    _require_integration(workspace)
+    state = _get_state(db, workspace, payload.state_id)
+    assert_writable(state)
+    integration = _get_integration(db, workspace, integration_id)
+
+    override = override_for_contract(db, workspace.tenant_id, state.id, integration.id)
+    if override is None:
+        override = IntegrationStateOverride(
+            tenant_id=workspace.tenant_id,
+            state_id=state.id,
+            integration_id=integration.id,
+        )
+        db.add(override)
+    for field, value in payload.model_dump(
+        exclude_unset=True, exclude={"state_id"}
+    ).items():
+        setattr(override, field, value)
+    override.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(override)
+    logger.info(
+        "integration contract facts updated workspace=%s contract=%s state=%s",
+        workspace.id,
+        integration.id,
+        state.id,
+    )
+    return _facts_response(state, integration, override)
+
+
 @router.get(
     "/contracts/{integration_id}/flow",
     response_model=IntegrationMessageFlowResponse,
@@ -772,7 +1010,7 @@ def integration_message_flow(
 ) -> IntegrationMessageFlowResponse:
     workspace = get_accessible_workspace(db, user, workspace_id)
     _require_integration(workspace)
-    _get_state(db, workspace, state_id)
+    state = _get_state(db, workspace, state_id)
     integration = _get_integration(db, workspace, integration_id)
 
     systems = {
@@ -795,6 +1033,7 @@ def integration_message_flow(
     }
     interfaces = _interfaces_by_id(db, workspace)
     refs = _field_refs_by_integration(db, workspace).get(integration.id, {})
+    object_anchors = _object_anchors_by_integration(db, workspace).get(integration.id)
     scenario_counts = _scenario_counts(db, workspace, [integration])
     contract = _contract_summary(
         db,
@@ -805,6 +1044,13 @@ def integration_message_flow(
         interfaces=interfaces,
         refs=refs,
         scenario_counts=scenario_counts,
+        override=override_for_contract(db, workspace.tenant_id, state.id, integration.id),
+        evidence_counts={
+            integration.id: evidence_count(
+                db, workspace.tenant_id, "integration", integration.id, state.id
+            )
+        },
+        object_anchors=object_anchors,
     )
     spec = integration.specification or {}
     channel_kind, channel_label = _channel(

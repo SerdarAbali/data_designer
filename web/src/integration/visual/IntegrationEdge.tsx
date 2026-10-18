@@ -7,7 +7,9 @@ import {
 
 import {
   buildRoute,
-  labelPoint,
+  estimateLabelSize,
+  labelAnchor,
+  labelObstacles,
   roundedOrthogonalPath,
   toFlowSide,
   type Rect,
@@ -19,6 +21,8 @@ export type IntegrationEdgeData = {
   obstacles?: Rect[];
   sourceRect?: Rect;
   targetRect?: Rect;
+  /** Corridor lane, so connectors sharing a corridor do not overlap. */
+  laneShift?: number;
 };
 
 export type IntegrationFlowEdge = Edge<IntegrationEdgeData, "integrationEdge">;
@@ -57,10 +61,15 @@ export default function IntegrationEdge({
     0,
     undefined,
     { source: data?.sourceRect, target: data?.targetRect },
+    data?.laneShift ?? 0,
   );
   const path = roundedOrthogonalPath(points);
-  const anchor = labelPoint(points);
   const relation = data?.relation ?? "";
+  const anchor = labelAnchor(
+    points,
+    labelObstacles(data?.obstacles, data?.sourceRect, data?.targetRect),
+    estimateLabelSize(relation, 9),
+  );
   const color = RELATION_COLORS[relation] ?? "var(--discipline-integration)";
   return (
     <>

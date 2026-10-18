@@ -1,5 +1,10 @@
 import type { ArchitectureState, ArchitectureStateNode } from "../architectureTypes";
-import { chooseHandles, handleId, type Rect } from "../components/architecture/architectureRouting";
+import {
+  chooseHandles,
+  handleId,
+  type FlowSide,
+  type Rect,
+} from "../components/architecture/architectureRouting";
 import type {
   SolutionComponent,
   SolutionDesign,
@@ -50,6 +55,9 @@ export type GraphEdge = {
   target: string;
   sourceHandle?: string | null;
   targetHandle?: string | null;
+  /** Routing sides of the handles, when the handle id does not encode them. */
+  sourceSide?: FlowSide;
+  targetSide?: FlowSide;
   sourceOffset?: Point;
   targetOffset?: Point;
   kind: "member" | "external" | "connects_to" | "uses" | "relationship";
@@ -94,6 +102,13 @@ export type DecompositionGraph = {
   repositories: DecompositionRepository[];
   externals: PlacedSystem[];
   edges: GraphEdge[];
+  /**
+   * Which side of its component each interface port sits on. Ports face the
+   * component they connect to, so a ``connects_to`` link (always
+   * required → provided) runs straight across instead of looping around the
+   * whole diagram.
+   */
+  portSides: Record<string, FlowSide>;
 };
 
 export type DeploymentGroup = {
@@ -218,16 +233,18 @@ function applyLaneOffsets(edges: GraphEdge[]): void {
     targetGroups.set(targetKey, [...(targetGroups.get(targetKey) ?? []), edge]);
   }
   for (const group of sourceGroups.values()) {
+    if (group.length < 2) continue;
     group.forEach((edge, index) => {
       const offset = (index - (group.length - 1) / 2) * LAYOUT.laneSpacing;
-      const dir = perpendicular(sideOf(edge.sourceHandle));
+      const dir = perpendicular(edge.sourceSide ?? sideOf(edge.sourceHandle));
       edge.sourceOffset = { x: dir.x * offset, y: dir.y * offset };
     });
   }
   for (const group of targetGroups.values()) {
+    if (group.length < 2) continue;
     group.forEach((edge, index) => {
       const offset = (index - (group.length - 1) / 2) * LAYOUT.laneSpacing;
-      const dir = perpendicular(sideOf(edge.targetHandle));
+      const dir = perpendicular(edge.targetSide ?? sideOf(edge.targetHandle));
       edge.targetOffset = { x: dir.x * offset, y: dir.y * offset };
     });
   }
@@ -478,6 +495,43 @@ export function decompositionGraph(
     for (const ui of item.component.interfaces) interfaceOwner.set(ui.object_id, item);
   }
 
+  const componentRectByObject = new Map<string, Rect>();
+  for (const item of components) {
+    componentRectByObject.set(item.component.object_id, {
+      x: item.position.x,
+      y: item.position.y,
+      width: SOLUTION_NODE_SIZES.component.width,
+      height: item.height,
+    });
+  }
+
+  // Interface ports sit on the side facing the component they connect to. A
+  // `connects_to` link always runs required → provided, so with a fixed
+  // required-left / provided-right convention both ends face away from each
+  // other and the connector has to loop around the entire diagram.
+  const sideVotes = new Map<string, { left: number; right: number }>();
+  const voteSide = (interfaceId: string, side: "left" | "right"): void => {
+    const votes = sideVotes.get(interfaceId) ?? { left: 0, right: 0 };
+    votes[side] += 1;
+    sideVotes.set(interfaceId, votes);
+  };
+  for (const link of design.links.filter((item) => item.relationship_type === "connects_to")) {
+    const source = interfaceOwner.get(link.source_object_id);
+    const target = interfaceOwner.get(link.target_object_id);
+    if (!source || !target || source === target) continue;
+    const sourceRect = componentRectByObject.get(source.component.object_id);
+    const targetRect = componentRectByObject.get(target.component.object_id);
+    if (!sourceRect || !targetRect) continue;
+    const targetIsRight =
+      targetRect.x + targetRect.width / 2 >= sourceRect.x + sourceRect.width / 2;
+    voteSide(link.source_object_id, targetIsRight ? "right" : "left");
+    voteSide(link.target_object_id, targetIsRight ? "left" : "right");
+  }
+  const portSides: Record<string, FlowSide> = {};
+  for (const [interfaceId, votes] of sideVotes) {
+    portSides[interfaceId] = votes.right >= votes.left ? "right" : "left";
+  }
+
   const repositoryUsage = new Map<string, Set<string>>();
   for (const link of design.links.filter((item) => item.relationship_type === "uses_repository")) {
     const owner = componentByObject.get(link.source_object_id) ?? interfaceOwner.get(link.source_object_id);
@@ -526,14 +580,20 @@ export function decompositionGraph(
     if (!source || !target) continue;
     const sourceInterface = source.component.interfaces.find((ui) => ui.object_id === link.source_object_id);
     const targetInterface = target.component.interfaces.find((ui) => ui.object_id === link.target_object_id);
+    // A link connects a *required* interface to a *provided* one; the label only
+    // repeats the name when the two ends are called differently.
+    const sourceName = sourceInterface?.name ?? "required";
+    const targetName = targetInterface?.name ?? "provided";
     edges.push({
       id: link.id,
       source: source.key,
       target: target.key,
       sourceHandle: interfaceHandle(link.source_object_id),
       targetHandle: interfaceHandle(link.target_object_id),
+      sourceSide: portSides[link.source_object_id] ?? "right",
+      targetSide: portSides[link.target_object_id] ?? "left",
       kind: "connects_to",
-      label: `${sourceInterface?.name ?? "required"} → ${targetInterface?.name ?? "provided"}`,
+      label: sourceName === targetName ? sourceName : `${sourceName} → ${targetName}`,
     });
   }
 
@@ -600,6 +660,7 @@ export function decompositionGraph(
       edges.push({ id: `dep-${relationship.id}`, source: sourceComponent.key, target: targetComponent.key, kind: "external", label: relationship.type });
     }
   }
+  applyLaneOffsets(edges);
 
   const contentRects: Rect[] = [
     ...components.map((item) => ({ x: item.position.x, y: item.position.y, width: SOLUTION_NODE_SIZES.component.width, height: item.height })),
@@ -620,6 +681,7 @@ export function decompositionGraph(
     repositories,
     externals,
     edges,
+    portSides,
   };
 }
 

@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { MarkerType, type Viewport } from "@xyflow/react";
 
 import type { ArchitectureState } from "../../architectureTypes";
+import { useHoverFocus } from "../../components/architecture/useHoverFocus";
 import type {
   EnterpriseApplication,
   EnterpriseModel,
@@ -63,6 +64,15 @@ export default function StrategyTraceView({
     [model, strategyTrace, state],
   );
 
+  // Dim everything that is not part of the connection under the pointer, so a
+  // trace can be followed without moving the canvas.
+  const focusableEdges = useMemo(
+    () => graph.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+    [graph.edges],
+  );
+  const hover = useHoverFocus(focusableEdges);
+  const focus = hover.focus;
+
   const occById = useMemo(() => {
     const map = new Map<string, string>();
     for (const node of graph.nodes) map.set(node.id, node.occurrenceId);
@@ -83,6 +93,7 @@ export default function StrategyTraceView({
             type: "enterpriseApplication" as const,
             position: node.position,
             draggable: false,
+            className: focus && !focus.nodes.has(node.id) ? "dimmed" : undefined,
             data: { name: node.name, applicationKind: node.applicationKind ?? "system" },
           };
         }
@@ -92,6 +103,7 @@ export default function StrategyTraceView({
           position: node.position,
           draggable: editable && Boolean(node.occurrenceId),
           selected: node.objectId === selectedObjectId,
+          className: focus && !focus.nodes.has(node.id) ? "dimmed" : undefined,
           data: {
             name: node.name,
             kind: node.kind,
@@ -104,7 +116,7 @@ export default function StrategyTraceView({
           },
         } as EnterpriseObjectFlowNode;
       }),
-    [graph.nodes, editable, selectedObjectId],
+    [graph.nodes, focus, editable, selectedObjectId],
   );
 
   const edges = useMemo<EnterpriseFlowEdge[]>(
@@ -115,9 +127,14 @@ export default function StrategyTraceView({
         target: edge.target,
         type: "enterpriseEdge" as const,
         markerEnd: { type: MarkerType.ArrowClosed },
-        data: { type: edge.type, label: edge.label },
+        data: {
+          type: edge.type,
+          label: edge.label,
+          emphasized: hover.target.edge === edge.id,
+          dimmed: focus ? !focus.edges.has(edge.id) : false,
+        },
       })),
-    [graph.edges],
+    [graph.edges, focus, hover.target.edge],
   );
 
   return (
@@ -137,6 +154,10 @@ export default function StrategyTraceView({
             onSelectObject(node.id);
           }
         }}
+        onNodeMouseEnter={hover.onNodeEnter}
+        onNodeMouseLeave={hover.onLeave}
+        onEdgeMouseEnter={hover.onEdgeEnter}
+        onEdgeMouseLeave={hover.onLeave}
         onNodeDragStop={(_event, node) => {
           if (!editable || node.type !== "enterpriseObject") return;
           const occurrenceId = occById.get(node.id);

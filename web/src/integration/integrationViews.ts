@@ -12,6 +12,7 @@ import type {
   IntegrationSequence,
   IntegrationSequenceParticipant,
 } from "./integrationDesignModel";
+import { contractMediation } from "./integrationDesignModel";
 
 /** Purpose-specific Integration Architecture views. Landscape stays the default. */
 export type IntegrationViewId =
@@ -222,7 +223,8 @@ export function integrationTopology(landscape: IntegrationLandscape): Integratio
 
   for (const contract of landscape.contracts) {
     const contractId = `contract:${contract.id}`;
-    const mediated = Boolean(contract.source.is_runtime || contract.target.is_runtime);
+    const mediation = contractMediation(contract);
+    const mediated = mediation.mediated;
     if (mediated) mediatedContractIds.push(contract.id);
     addNode({
       id: contractId,
@@ -243,6 +245,15 @@ export function integrationTopology(landscape: IntegrationLandscape): Integratio
     const target = systemNode(contract.target);
     const producer = contract.producer_interface;
     const consumer = contract.consumer_interface;
+    // An explicitly modelled mediator is its own node: it is never drawn as (or
+    // merged into) the business source or target. The legacy heuristic already
+    // resolves to a runtime *endpoint*, which is drawn where it already was.
+    const explicitMediator =
+      mediation.explicit && mediation.mediator ? mediation.mediator : null;
+    if (explicitMediator) {
+      systemNode(explicitMediator);
+      addEdge(contractId, `system:${explicitMediator.system_id}`, "mediated by");
+    }
 
     if (producer) {
       const producerNode = interfaceNode(producer);
@@ -261,7 +272,13 @@ export function integrationTopology(landscape: IntegrationLandscape): Integratio
       addEdge(contractId, consumerNode.id, "delivers");
       addEdge(consumerNode.id, target.id, "consumes");
     } else {
-      addEdge(contractId, target.id, mediated ? "mediated by" : "delivers");
+      // Without an explicit mediator the business edge keeps its historical
+      // legacy-heuristic label; business direction is never rewritten.
+      addEdge(
+        contractId,
+        target.id,
+        !explicitMediator && mediated ? "mediated by" : "delivers",
+      );
     }
   }
 
@@ -352,7 +369,8 @@ export function phaseDirection(phase: FlowPhaseName): "request" | "response" {
 /** Ordered stages for one contract phase, in its actual data-flow direction. */
 export function flowStages(flow: IntegrationMessageFlow, phase: IntegrationFlowPhase): FlowStage[] {
   const contract = flow.contract;
-  const mediated = Boolean(contract.source.is_runtime || contract.target.is_runtime);
+  const mediation = contractMediation(contract);
+  const mediated = mediation.mediated;
   const reverse = phaseDirection(phase.phase) === "response";
 
   const sourceStage: FlowStage = {
@@ -406,7 +424,10 @@ export function flowStages(flow: IntegrationMessageFlow, phase: IntegrationFlowP
     id: `channel:${phase.phase}`,
     role: "channel",
     label: flow.channel_label ?? "Channel not configured",
-    detail: [reverse ? "response" : "request", mediated ? "via Integration Runtime" : null]
+    detail: [
+      reverse ? "response" : "request",
+      mediated ? `via ${mediation.mediator?.system_name ?? "Integration Runtime"}` : null,
+    ]
       .filter(Boolean)
       .join(" · "),
     configured: Boolean(flow.channel_kind),

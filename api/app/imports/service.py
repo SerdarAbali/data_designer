@@ -21,6 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.architecture.state_scope import (
+    assert_contract_editable_for_tenant,
+    locked_baseline_anchors_contract,
+)
 from app.imports.schemas import (
     MAX_METADATA_BYTES,
     ImportCommitRequest,
@@ -523,6 +527,25 @@ def _resolve_endpoint_object(
     )
 
 
+def _integration_baseline_issue(
+    db: Session, workspace: Workspace, row: PreparedRow
+) -> ImportIssue | None:
+    """The row updates a Contract that a locked Current baseline protects."""
+    target = row.matches[0] if row.matches else None
+    if target is None or target.kind != "integration":
+        return None
+    if not locked_baseline_anchors_contract(db, workspace.tenant_id, target.id):
+        return None
+    return ImportIssue(
+        row=row.row_number,
+        column="name",
+        message=(
+            "This contract is part of the locked Current baseline, so an import "
+            "cannot change it. Change it in a Candidate state instead."
+        ),
+    )
+
+
 def _prepare_integration(
     db: Session,
     workspace: Workspace,
@@ -640,6 +663,11 @@ def _prepare_integration(
     row.resolved["metadata"] = metadata
     row.resolved["description"] = _clean(row.values.get("description"))
     row.resolved["external_identifier"] = _clean(row.values.get("external_id"))
+
+
+    baseline_issue = _integration_baseline_issue(db, workspace, row)
+    if baseline_issue is not None:
+        row.issues.append(baseline_issue)
 
 
 def _prepare_solution(
@@ -972,6 +1000,7 @@ def _update_integration(db: Session, target_id: UUID, row: PreparedRow, tenant_i
     )
     if integration is None:
         return None, None
+    assert_contract_editable_for_tenant(db, tenant_id, integration)
     before: dict = {}
     after: dict = {}
     if row.name:

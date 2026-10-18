@@ -22221,6 +22221,724 @@
       }
     },
     {
+      "name": "architecture_propose_system_facts",
+      "kind": "proposal",
+      "codemode": false,
+      "description": "Create a deterministic draft change-set proposal using the 'propose_system_facts' helper. Read-only against the architecture: it only writes helper change-set rows. Never approves, applies, or undoes.",
+      "schema": {
+        "additionalProperties": false,
+        "description": "Set or clear lifecycle/operational/environment facts on a Catalog system.\n\nOnly Candidate/Target state overrides are written; canonical Current values\nare never modified. ``None`` explicitly clears an override.",
+        "properties": {
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "system_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "system_external_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "system_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "existing_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lifecycle_stage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "strategic",
+                  "planned",
+                  "active",
+                  "transitional",
+                  "legacy",
+                  "retiring",
+                  "retired"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "operational_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unknown",
+                  "proposed",
+                  "tested",
+                  "live",
+                  "degraded",
+                  "suspended",
+                  "retiring",
+                  "decommissioned"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "environment_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unknown",
+                  "development",
+                  "test",
+                  "sandbox",
+                  "staging",
+                  "production",
+                  "mixed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "architecture_propose_contract_facts",
+      "kind": "proposal",
+      "codemode": false,
+      "description": "Create a deterministic draft change-set proposal using the 'propose_contract_facts' helper. Read-only against the architecture: it only writes helper change-set rows. Never approves, applies, or undoes.",
+      "schema": {
+        "additionalProperties": false,
+        "description": "Set or clear lifecycle/operational/environment facts on a Contract.",
+        "properties": {
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_external_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lifecycle_stage": {
+            "anyOf": [
+              {
+                "enum": [
+                  "strategic",
+                  "planned",
+                  "active",
+                  "transitional",
+                  "legacy",
+                  "retiring",
+                  "retired"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "operational_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unknown",
+                  "proposed",
+                  "tested",
+                  "live",
+                  "degraded",
+                  "suspended",
+                  "retiring",
+                  "decommissioned"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "environment_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unknown",
+                  "development",
+                  "test",
+                  "sandbox",
+                  "staging",
+                  "production",
+                  "mixed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "architecture_propose_contract_mediator",
+      "kind": "proposal",
+      "codemode": false,
+      "description": "Create a deterministic draft change-set proposal using the 'propose_contract_mediator' helper. Read-only against the architecture: it only writes helper change-set rows. Never approves, applies, or undoes.",
+      "schema": {
+        "additionalProperties": false,
+        "description": "Give a Contract an explicit mediator (canonical, single-mediator overlay).",
+        "properties": {
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_external_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mediator_system_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mediator_system_external_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mediator_system_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mediator_responsibility": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "architecture_propose_evidence",
+      "kind": "proposal",
+      "codemode": false,
+      "description": "Create a deterministic draft change-set proposal using the 'propose_evidence' helper. Read-only against the architecture: it only writes helper change-set rows. Never approves, applies, or undoes.",
+      "schema": {
+        "additionalProperties": false,
+        "description": "Attach state-scoped evidence to one supported target.",
+        "properties": {
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "architecture_object",
+              "architecture_relationship",
+              "integration",
+              "integration_dependency",
+              "solution_member"
+            ],
+            "type": "string"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "existing_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "evidence_classification": {
+            "enum": [
+              "confirmed_by_requirements_document",
+              "confirmed_by_current_implementation",
+              "confirmed_by_field_mapping",
+              "confirmed_by_user_working_knowledge",
+              "assumption",
+              "open_decision",
+              "future_scope"
+            ],
+            "type": "string"
+          },
+          "source_type": {
+            "enum": [
+              "document",
+              "implementation",
+              "mapping",
+              "meeting",
+              "message",
+              "test",
+              "ticket",
+              "repository",
+              "user_statement",
+              "other"
+            ],
+            "type": "string"
+          },
+          "source_title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_reference": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_locator": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "evidence_summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
+          "verification_status": {
+            "default": "unverified",
+            "enum": [
+              "unverified",
+              "verified",
+              "disputed",
+              "superseded"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "target_kind",
+          "evidence_classification",
+          "source_type",
+          "source_title",
+          "source_reference",
+          "evidence_summary",
+          "confidence"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "architecture_propose_solution_contract_association",
+      "kind": "proposal",
+      "codemode": false,
+      "description": "Create a deterministic draft change-set proposal using the 'propose_solution_contract_association' helper. Read-only against the architecture: it only writes helper change-set rows. Never approves, applies, or undoes.",
+      "schema": {
+        "additionalProperties": false,
+        "description": "Associate an existing Contract with a Solution Boundary, with a role.",
+        "properties": {
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "solution_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "solution_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "existing_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_external_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role": {
+            "default": "owned",
+            "enum": [
+              "owned",
+              "participating",
+              "dependency"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "architecture_propose_solution_relationship",
+      "kind": "proposal",
+      "codemode": false,
+      "description": "Create a deterministic draft change-set proposal using the 'propose_solution_relationship' helper. Read-only against the architecture: it only writes helper change-set rows. Never approves, applies, or undoes.",
+      "schema": {
+        "additionalProperties": false,
+        "description": "Create a typed relationship between two Solution Boundaries.",
+        "properties": {
+          "summary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "existing_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target_object_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target_name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "relationship_type": {
+            "enum": [
+              "depends_on",
+              "uses",
+              "provides_to",
+              "replaces",
+              "transitions_to",
+              "shares_information_with"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "summary",
+          "relationship_type"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "architecture_propose_end_to_end_architecture",
       "kind": "proposal",
       "codemode": false,

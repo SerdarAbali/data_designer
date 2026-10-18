@@ -158,6 +158,9 @@ const contract: IntegrationContractSummary = {
   target_fields_mapped: 0,
   target_fields_total: 0,
   scenario_count: 0,
+  lifecycle_stage: { value: null, canonical: null, override: null, overridden: false },
+  operational_status: { value: null, canonical: null, override: null, overridden: false },
+  environment_scope: { value: null, canonical: null, override: null, overridden: false },
 };
 const integrationLandscape: IntegrationLandscape = {
   state_id: "candidate-a",

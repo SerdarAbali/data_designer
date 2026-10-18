@@ -279,6 +279,38 @@ describe("decompositionGraph", () => {
     expect(graph.components.find((item) => item.component.object_id === "comp-2")!.position).toEqual({ x: 420, y: 100 });
   });
 
+  it("puts interface ports on the side facing the component they connect to", () => {
+    const graph = decompositionGraph(design, state);
+    // l1 connects comp-1's required port to comp-2's provided port, and comp-2
+    // sits to the right: both ports must face each other so the connector runs
+    // straight across instead of looping around every node.
+    expect(graph.portSides["iface-2"]).toBe("right");
+    expect(graph.portSides["iface-3"]).toBe("left");
+    const link = graph.edges.find((edge) => edge.kind === "connects_to")!;
+    expect(link.sourceSide).toBe("right");
+    expect(link.targetSide).toBe("left");
+    // An interface that no link touches keeps the conventional side.
+    expect(graph.portSides["iface-1"]).toBeUndefined();
+  });
+
+  it("collapses a connects_to label when both interfaces share a name", () => {
+    const sameName = {
+      ...design,
+      components: design.components.map((component) => ({
+        ...component,
+        interfaces: component.interfaces.map((ui) => ({ ...ui, name: "Onboarding API" })),
+      })),
+    } as SolutionDesign;
+    const graph = decompositionGraph(sameName, state);
+    expect(graph.edges.find((edge) => edge.kind === "connects_to")!.label).toBe("Onboarding API");
+  });
+
+  it("keeps both interface names when they differ", () => {
+    const graph = decompositionGraph(design, state);
+    expect(graph.edges.find((edge) => edge.kind === "connects_to")!.label)
+      .toBe("Ledger Client → Ledger API");
+  });
+
   it("does not overlap any decomposition nodes", () => {
     const graph = decompositionGraph(design, state);
     const rects = contentRects(graph);

@@ -8,6 +8,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.architecture.evidence import assert_no_evidence
+from app.architecture.solution_integration import assert_no_solution_integration
+from app.architecture.state_scope import assert_contract_editable_for_tenant
 from app.auth.dependencies import (
     AuthenticatedUser,
     get_auth_session,
@@ -127,6 +130,66 @@ def validate_interface(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Each interface link must reference an active interface object",
+        )
+
+
+def validate_mediator(
+    db: Session,
+    tenant_id: UUID,
+    mediator_system_id: UUID | None,
+    *,
+    source_system_id: UUID,
+    target_system_id: UUID,
+) -> None:
+    """An explicit mediator must be an active, same-tenant, non-endpoint system.
+
+    ``None`` is always valid: it means the Contract has no explicitly modelled
+    mediator. The mediator is an overlay and is revalidated against the current
+    business endpoints on every write, so it can never silently become an
+    endpoint.
+    """
+    if mediator_system_id is None:
+        return
+    if mediator_system_id == source_system_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "mediator_is_source",
+                "message": "The mediator cannot be the business source system",
+            },
+        )
+    if mediator_system_id == target_system_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "mediator_is_target",
+                "message": "The mediator cannot be the business target system",
+            },
+        )
+    system = db.get(CatalogSystem, mediator_system_id)
+    if system is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "unknown_mediator",
+                "message": "The mediator must be an existing system",
+            },
+        )
+    if system.tenant_id != tenant_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "cross_tenant_mediator",
+                "message": "The mediator must belong to the same tenant",
+            },
+        )
+    if system.deleted_at is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "archived_mediator",
+                "message": "The mediator must be an active system",
+            },
         )
 
 
@@ -453,6 +516,13 @@ def create_integration(
     refs.update(sample_field_references(sample_rows, payload.source_object_id))
     validate_interface(db, user.tenant_id, payload.producer_interface_id)
     validate_interface(db, user.tenant_id, payload.consumer_interface_id)
+    validate_mediator(
+        db,
+        user.tenant_id,
+        payload.mediator_system_id,
+        source_system_id=payload.source_system_id,
+        target_system_id=payload.target_system_id,
+    )
 
     integration = Integration(
         tenant_id=user.tenant_id,
@@ -470,8 +540,13 @@ def create_integration(
         interaction_type=payload.interaction_type,
         pattern=payload.pattern,
         implementation_status=payload.implementation_status,
+        lifecycle_stage=payload.lifecycle_stage,
+        operational_status=payload.operational_status,
+        environment_scope=payload.environment_scope,
         producer_interface_id=payload.producer_interface_id,
         consumer_interface_id=payload.consumer_interface_id,
+        mediator_system_id=payload.mediator_system_id,
+        mediator_responsibility=payload.mediator_responsibility,
         specification=payload.specification.model_dump(mode="json"),
         sample_rows=sample_rows,
         revision=1,
@@ -721,6 +796,7 @@ def update_integration(
 ) -> Integration:
     require_csrf(request, auth_session)
     integration = active_integration(db, user.tenant_id, integration_id, lock=True)
+    assert_contract_editable_for_tenant(db, user.tenant_id, integration)
     check_revision(integration, payload.expected_revision)
     updates = payload.model_dump(exclude_unset=True, exclude={"expected_revision"})
     if "specification" in updates:
@@ -729,6 +805,21 @@ def update_integration(
         validate_interface(db, user.tenant_id, updates["producer_interface_id"])
     if "consumer_interface_id" in updates:
         validate_interface(db, user.tenant_id, updates["consumer_interface_id"])
+    # Revalidate the mediator on every write against the contract's current
+    # business endpoints, so a change to the mediator (or to the endpoints, when
+    # supported) can never leave an incoherent overlay behind.
+    effective_mediator = (
+        updates["mediator_system_id"]
+        if "mediator_system_id" in updates
+        else integration.mediator_system_id
+    )
+    validate_mediator(
+        db,
+        user.tenant_id,
+        effective_mediator,
+        source_system_id=integration.source_system_id,
+        target_system_id=integration.target_system_id,
+    )
     if "sample_rows" in updates:
         source_fields = active_fields(db, user.tenant_id, integration.source_object_id)
         updates["sample_rows"] = validate_sample_rows(
@@ -788,6 +879,7 @@ def save_integration_graph(
 ) -> Integration:
     require_csrf(request, auth_session)
     integration = active_integration(db, user.tenant_id, integration_id, lock=True)
+    assert_contract_editable_for_tenant(db, user.tenant_id, integration)
     check_revision(integration, payload.expected_revision)
     refs = graph_references(
         db,
@@ -1022,6 +1114,27 @@ def archive_integration(
 ) -> Response:
     require_csrf(request, auth_session)
     integration = active_integration(db, user.tenant_id, integration_id, lock=True)
+    assert_contract_editable_for_tenant(db, user.tenant_id, integration)
+    # A Contract that belongs to a solution must not be archived out from under
+    # the association: return an actionable conflict instead.
+    assert_no_solution_integration(db, user.tenant_id, integration_id=integration.id)
+    # Archiving a Contract removes its dependency rows. Those rows are real
+    # evidence targets, so refuse the archive while any of them is still
+    # supported rather than silently dropping the evidence with them.
+    assert_no_evidence(
+        db,
+        user.tenant_id,
+        [
+            ("integration_dependency", dependency.id)
+            for dependency in db.scalars(
+                select(IntegrationDependency).where(
+                    IntegrationDependency.tenant_id == user.tenant_id,
+                    (IntegrationDependency.upstream_integration_id == integration.id)
+                    | (IntegrationDependency.downstream_integration_id == integration.id),
+                )
+            )
+        ],
+    )
     integration.deleted_at = integration.updated_at = datetime.now(UTC)
     integration.revision += 1
     db.execute(
@@ -1089,6 +1202,8 @@ def create_dependency(
     }
     upstream = locked[integration_id]
     downstream = locked[payload.downstream_integration_id]
+    assert_contract_editable_for_tenant(db, user.tenant_id, upstream)
+    assert_contract_editable_for_tenant(db, user.tenant_id, downstream)
     if upstream.id == downstream.id:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1146,7 +1261,28 @@ def delete_dependency(
     db: Session = Depends(get_session),  # noqa: B008
 ) -> Response:
     require_csrf(request, auth_session)
-    active_integration(db, user.tenant_id, integration_id)
+    # A dependency edge belongs to both Contracts, so both are protected.
+    integration = active_integration(db, user.tenant_id, integration_id)
+    downstream = active_integration(db, user.tenant_id, downstream_integration_id)
+    assert_contract_editable_for_tenant(db, user.tenant_id, integration)
+    assert_contract_editable_for_tenant(db, user.tenant_id, downstream)
+    # Evidence is never silently dropped: refuse the removal while the dependency
+    # is still supported, so the caller can delete the evidence explicitly first.
+    assert_no_evidence(
+        db,
+        user.tenant_id,
+        [
+            ("integration_dependency", dependency.id)
+            for dependency in db.scalars(
+                select(IntegrationDependency).where(
+                    IntegrationDependency.tenant_id == user.tenant_id,
+                    IntegrationDependency.upstream_integration_id == integration_id,
+                    IntegrationDependency.downstream_integration_id
+                    == downstream_integration_id,
+                )
+            )
+        ],
+    )
     result = db.execute(
         delete(IntegrationDependency).where(
             IntegrationDependency.tenant_id == user.tenant_id,

@@ -152,7 +152,7 @@ function App() {
       <main className="page">
         <section className="card" aria-labelledby="title">
           <p className="eyebrow">INTERNAL DATA ARCHITECTURE</p>
-          <h1 id="title">Data Designer</h1>
+          <h1 id="title">Collatecht</h1>
           <p className="summary">
             Design systems, objects, fields, and the contracts between them.
           </p>
@@ -191,7 +191,7 @@ function App() {
                   {error}
                 </p>
               )}
-              <button type="submit" disabled={submitting}>
+              <button type="submit" className="btn btn--primary" disabled={submitting}>
                 {submitting ? "Signing in…" : "Sign in"}
               </button>
             </form>

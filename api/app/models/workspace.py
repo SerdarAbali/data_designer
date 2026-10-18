@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -13,6 +14,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.catalog import json_type, utc_now
+
+#: The closed baseline vocabulary. It is meaningful only on a Current state;
+#: Candidate and Target states store NULL.
+BASELINE_DRAFT = "draft"
+BASELINE_LOCKED = "locked"
+BASELINE_STATUSES: tuple[str, ...] = (BASELINE_DRAFT, BASELINE_LOCKED)
 
 
 class Workspace(Base):
@@ -68,6 +75,18 @@ class ArchitectureState(Base):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        # A NULL value makes this expression NULL rather than false, and a check
+        # constraint only rejects false, so Candidate and Target rows are free to
+        # store no baseline status at all.
+        CheckConstraint(
+            "baseline_status IN ('draft', 'locked')",
+            name="ck_architecture_states_baseline_status",
+        ),
+        Index(
+            "ix_architecture_states_workspace_type",
+            "workspace_id",
+            "state_type",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -77,6 +96,15 @@ class ArchitectureState(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     state_type: Mapped[str] = mapped_column(String(32), nullable=False, default="current")
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # The Current baseline lifecycle. ``draft`` is an editable capture phase;
+    # ``locked`` is the read-only, irreversible baseline. Candidate and Target
+    # states leave this NULL because it carries no meaning for them.
+    baseline_status: Mapped[str | None] = mapped_column(String(16))
+    # Server-controlled lock metadata. Never accepted from a client.
+    baseline_locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    baseline_locked_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
     nodes: Mapped[list] = mapped_column(json_type, nullable=False, default=list)
     relationships: Mapped[list] = mapped_column(json_type, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(

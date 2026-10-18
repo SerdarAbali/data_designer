@@ -31,6 +31,15 @@ import {
   type IntegrationSequence,
 } from "./integrationDesignModel";
 import { integrationLog } from "./integrationLog";
+import LandscapeFilterBar from "./LandscapeFilterBar";
+import {
+  buildSearchString,
+  EMPTY_LANDSCAPE_FILTERS,
+  filterLandscape,
+  isFilterEmpty,
+  parseFilters,
+  type IntegrationLandscapeFilters,
+} from "./landscapeFilters";
 import {
   INTEGRATION_VIEWS,
   integrationTopology,
@@ -98,8 +107,38 @@ export default function IntegrationWorkbench({
   const [selectedPhase, setSelectedPhase] = useState<FlowPhaseName>("request");
   const [stageDetail, setStageDetail] = useState<{ stage: FlowStage; phase: FlowPhaseName } | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
+  const [contractMoreOpen, setContractMoreOpen] = useState(false);
+  const [scenarioMoreOpen, setScenarioMoreOpen] = useState(false);
 
-  const isEditable = editable && landscape?.state_type !== "current";
+  // Landscape filters live in the URL, so a filtered landscape can be shared and
+  // browser navigation restores it. The active architecture state is *not* part
+  // of this model: it stays owned by the state selector above.
+  const [filters, setFilters] = useState<IntegrationLandscapeFilters>(() =>
+    parseFilters(typeof window === "undefined" ? "" : window.location.search),
+  );
+
+  useEffect(() => {
+    function onPopState() {
+      setFilters(parseFilters(window.location.search));
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const applyFilters = useCallback((next: IntegrationLandscapeFilters) => {
+    setFilters(next);
+    if (typeof window === "undefined") return;
+    const search = buildSearchString(window.location.search, next);
+    const url = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
+    // pushState so Back/Forward move between filter states.
+    window.history.pushState({}, "", url);
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    applyFilters({ ...EMPTY_LANDSCAPE_FILTERS });
+  }, [applyFilters]);
+
+  const isEditable = editable && landscape?.editable === true;
 
   const reloadLandscape = useCallback(async () => {
     if (!workspaceId || !stateId) {
@@ -244,15 +283,36 @@ export default function IntegrationWorkbench({
     [landscape, matches],
   );
 
-  const topologyLandscape = useMemo<IntegrationLandscape | null>(
-    () => (landscape ? { ...landscape, contracts } : null),
-    [landscape, contracts],
-  );
+  // Search first (existing behaviour), then the Landscape filters. Both are AND.
+  const filteredLandscape = useMemo<IntegrationLandscape | null>(() => {
+    if (!landscape) return null;
+    if (isFilterEmpty(filters)) return { ...landscape, contracts };
+    return filterLandscape({ ...landscape, contracts }, filters);
+  }, [landscape, contracts, filters]);
+
+  const topologyLandscape = filteredLandscape;
 
   const topology = useMemo(
     () => (topologyLandscape ? integrationTopology(topologyLandscape) : { nodes: [], edges: [], mediatedContractIds: [] }),
     [topologyLandscape],
   );
+
+  // Selecting a Contract and then filtering it out must not leave a dangling
+  // selection pointing at a node that is no longer rendered.
+  useEffect(() => {
+    if (!selectedId) return;
+    const visible = (topologyLandscape?.contracts ?? []).some((item) => item.id === selectedId);
+    if (!visible) {
+      setSelectedId(null);
+      setDetail(null);
+      setFlow(null);
+      setConformance(null);
+      setSequence(null);
+      setPropertiesOpen(false);
+      setSelectedNode(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topologyLandscape, selectedId]);
 
   const nodesByRefId = useMemo(
     () => new Map(topology.nodes.map((node) => [node.refId, node])),
@@ -281,7 +341,9 @@ export default function IntegrationWorkbench({
 
   function renderLandscape() {
     if (!topologyLandscape) return null;
-    if (contracts.length === 0) {
+    const totalContracts = landscape?.contracts.length ?? 0;
+    const visibleContracts = topologyLandscape.contracts.length;
+    if (totalContracts === 0) {
       return (
         <div className="landscape-empty">
           <span className="empty-icon">◇</span>
@@ -298,30 +360,75 @@ export default function IntegrationWorkbench({
         </div>
       );
     }
+
+    if (visibleContracts === 0) {
+      const filtersActive = !isFilterEmpty(filters);
+      const searchActive = search.trim().length > 0;
+      const title =
+        filtersActive && searchActive
+          ? "No contracts match the current search and filters"
+          : filtersActive
+            ? "No contracts match the current filters"
+            : "No contracts match your search";
+      return (
+        <div className="integration-landscape">
+          <LandscapeFilterBar
+            filters={filters}
+            landscape={landscape ?? { ...topologyLandscape, contracts: [] }}
+            totalContracts={totalContracts}
+            visibleContracts={visibleContracts}
+            onChange={applyFilters}
+            onClear={clearFilters}
+          />
+          <div className="landscape-empty" role="status">
+            <span className="empty-icon">◇</span>
+            <h3>{title}</h3>
+            <p>
+              {totalContracts} contract{totalContracts === 1 ? "" : "s"} exist in this architecture
+              state; none of them satisfy the active selection.
+            </p>
+            <button type="button" onClick={clearFilters}>
+              Clear all filters
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <IntegrationTopologyView
-        key={stateId}
-        landscape={topologyLandscape}
-        selectedRefId={selectedNode?.refId ?? selectedId}
-        onSelectNode={(node) => {
-          setSelectedNode(node);
-          if (node.kind === "contract") {
-            setSelectedId(node.refId);
-            void loadContract(node.refId);
+      <div className="integration-landscape">
+        <LandscapeFilterBar
+          filters={filters}
+          landscape={landscape ?? topologyLandscape}
+          totalContracts={totalContracts}
+          visibleContracts={visibleContracts}
+          onChange={applyFilters}
+          onClear={clearFilters}
+        />
+        <IntegrationTopologyView
+          key={stateId}
+          landscape={topologyLandscape}
+          selectedRefId={selectedNode?.refId ?? selectedId}
+          onSelectNode={(node) => {
+            setSelectedNode(node);
+            if (node.kind === "contract") {
+              setSelectedId(node.refId);
+              void loadContract(node.refId);
+            }
+          }}
+          onOpenContract={(contractId) => onOpenIntegration?.(contractId, "request")}
+          onOpenCatalog={onOpenCatalog}
+          manualPositions={manualPositions}
+          onMoveNode={(id, position) =>
+            setManualPositions((current) => ({ ...current, [id]: position }))
           }
-        }}
-        onOpenContract={(contractId) => onOpenIntegration?.(contractId, "request")}
-        onOpenCatalog={onOpenCatalog}
-        manualPositions={manualPositions}
-        onMoveNode={(id, position) =>
-          setManualPositions((current) => ({ ...current, [id]: position }))
-        }
-        onArrange={() => setManualPositions({})}
-        showResilience={showResilience}
-        onToggleResilience={() => setShowResilience((value) => !value)}
-        viewport={landscapeViewport}
-        onViewportChange={setLandscapeViewport}
-      />
+          onArrange={() => setManualPositions({})}
+          showResilience={showResilience}
+          onToggleResilience={() => setShowResilience((value) => !value)}
+          viewport={landscapeViewport}
+          onViewportChange={setLandscapeViewport}
+        />
+      </div>
     );
   }
 
@@ -416,23 +523,44 @@ export default function IntegrationWorkbench({
     }
     return (
       <div className="integration-mapping">
-        <div className="integration-detail-head">
-          <div>
-            <h3>Transformation &amp; Mapping</h3>
-            <p className="architecture-topbar-hint">
-              Reuses the existing mapping, transformation and dry-run engine for{" "}
-              {selectedContract.name} (revision {selectedContract.revision}).
-            </p>
+        <div className="view-toolbar">
+          <div className="view-toolbar-left">
+            <div className="view-toolbar-title">
+              <p className="eyebrow">Mapping</p>
+              <h2>Transformation &amp; Mapping</h2>
+            </div>
+            <span className="view-toolbar-scope" title={selectedContract.source.system_name + " / " + selectedContract.source.object_name + " → " + selectedContract.target.system_name + " / " + selectedContract.target.object_name}>
+              {selectedContract.source.system_name} / {selectedContract.source.object_name} → {selectedContract.target.system_name} / {selectedContract.target.object_name}
+            </span>
           </div>
-          {onOpenIntegration && (
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => onOpenIntegration(selectedContract.id, "request")}
-            >
-              Open Mapping &amp; Tests
-            </button>
-          )}
+          <div className="view-toolbar-right">
+            <div className="segmented-control" role="group" aria-label="Mapping view">
+              <button type="button" className="segmented-control-item" aria-pressed={true}>
+                Canvas
+              </button>
+              <button type="button" className="segmented-control-item" aria-pressed={false}>
+                Matrix
+              </button>
+            </div>
+            <div className="view-toolbar-divider" />
+            <button type="button" className="btn btn--primary">Add transformation</button>
+            <button type="button" className="btn btn--secondary">Auto-map</button>
+            <div className="view-toolbar-divider" />
+            <span className="view-toolbar-scope" title="Mapping errors" style={{ color: "var(--color-danger)" }}>
+              Errors
+            </span>
+            <div className="more-menu">
+              <button type="button" className="more-menu-trigger" aria-expanded={false} aria-label="More mapping actions">
+                More ⌄
+              </button>
+              <section className="more-menu-panel" hidden aria-label="More mapping actions">
+                <button type="button" className="more-menu-item">Test data</button>
+                <button type="button" className="more-menu-item">Reset layout</button>
+                <hr className="more-menu-separator" />
+                <button type="button" className="more-menu-item">Fit view</button>
+              </section>
+            </div>
+          </div>
         </div>
         <div className="integration-phases">
           {flow.phases.map((phase) => (
@@ -491,13 +619,53 @@ export default function IntegrationWorkbench({
       );
     }
     return (
-      <IntegrationSequenceView
-        sequence={sequence}
-        loading={sequenceLoading}
-        selectedScenarioId={selectedScenarioId}
-        onSelectScenario={setSelectedScenarioId}
-        onOpenScenarios={() => onOpenIntegration?.(selectedId, "scenarios")}
-      />
+      <div>
+        <div className="view-toolbar">
+          <div className="view-toolbar-left">
+            <div className="view-toolbar-title">
+              <p className="eyebrow">Scenarios</p>
+              <h2>Sequence &amp; Steps</h2>
+            </div>
+            <span className="view-toolbar-scope" title="Scenario status">
+              {sequence.scenarios.length} scenario(s)
+            </span>
+          </div>
+          <div className="view-toolbar-right">
+            <div className="segmented-control" role="group" aria-label="Scenario view">
+              <button type="button" className="segmented-control-item" aria-pressed={true}>
+                Sequence Diagram
+              </button>
+              <button type="button" className="segmented-control-item" aria-pressed={false}>
+                Steps
+              </button>
+            </div>
+            <div className="view-toolbar-divider" />
+            <button type="button" className="btn btn--primary">Evaluate</button>
+            <button type="button" className="btn btn--secondary">Duplicate</button>
+            <div className="more-menu">
+              <button
+                type="button"
+                className="more-menu-trigger"
+                aria-expanded={scenarioMoreOpen}
+                aria-label="More scenario actions"
+                onClick={() => setScenarioMoreOpen((open) => !open)}
+              >
+                More ⌄
+              </button>
+              <section className="more-menu-panel" hidden={!scenarioMoreOpen} aria-label="More scenario actions">
+                <button type="button" className="more-menu-item--danger">Delete scenario</button>
+              </section>
+            </div>
+          </div>
+        </div>
+        <IntegrationSequenceView
+          sequence={sequence}
+          loading={sequenceLoading}
+          selectedScenarioId={selectedScenarioId}
+          onSelectScenario={setSelectedScenarioId}
+          onOpenScenarios={() => onOpenIntegration?.(selectedId, "scenarios")}
+        />
+      </div>
     );
   }
 
@@ -623,79 +791,131 @@ export default function IntegrationWorkbench({
 
   return (
     <div className="integration-workbench">
-      <div className="integration-toolbar">
-        <span className="integration-toolbar-hint">
-          {isEditable
-            ? "Design interfaces, message flow and conformance for integration contracts."
-            : "Current state is read-only. Duplicate it to record integration properties."}
-        </span>
-        {landscape && (
-          <label className="integration-contract-picker">
-            <span className="integration-contract-picker-label">Contract</span>
-            <select
-              aria-label="Contract"
-              value={selectedId ?? ""}
-              onChange={(event) => {
-                const value = event.target.value;
-                if (value === "__new__") {
-                  integrationLog.info("create contract requested", {});
-                  onOpenIntegration?.("");
-                  return;
-                }
-                if (!value) {
-                  integrationLog.info("contract cleared", {});
-                  setSelectedId(null);
-                  setDetail(null);
-                  setFlow(null);
-                  setConformance(null);
-                  setSequence(null);
-                  setPropertiesOpen(false);
-                  setSelectedNode(null);
-                  return;
-                }
-                selectContract(value, view === "landscape" ? "contract" : view);
+      <div className="view-toolbar">
+        <div className="view-toolbar-left">
+          <div className="view-toolbar-title">
+            <p className="eyebrow">Contract</p>
+            <h2>{selectedContract?.name ?? "Select a contract"}</h2>
+          </div>
+          {selectedContract && (
+            <span className="view-toolbar-scope" title={selectedContract.source.system_name + " · " + selectedContract.source.object_name + " → " + selectedContract.target.system_name + " · " + selectedContract.target.object_name}>
+              {selectedContract.source.system_name} → {selectedContract.target.system_name}
+            </span>
+          )}
+        </div>
+        <div className="view-toolbar-right">
+          {landscape && (
+            <label className="integration-contract-picker">
+              <span className="integration-contract-picker-label">Contract</span>
+              <select
+                aria-label="Contract"
+                className="input"
+                value={selectedId ?? ""}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === "__new__") {
+                    integrationLog.info("create contract requested", {});
+                    onOpenIntegration?.("");
+                    return;
+                  }
+                  if (!value) {
+                    integrationLog.info("contract cleared", {});
+                    setSelectedId(null);
+                    setDetail(null);
+                    setFlow(null);
+                    setConformance(null);
+                    setSequence(null);
+                    setPropertiesOpen(false);
+                    setSelectedNode(null);
+                    return;
+                  }
+                  selectContract(value, view === "landscape" ? "contract" : view);
+                }}
+              >
+                <option value="">Select existing contract</option>
+                {landscape.contracts.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} · {item.source.system_name}→{item.target.system_name}
+                  </option>
+                ))}
+                {onOpenIntegration && <option value="__new__">Create contract…</option>}
+              </select>
+            </label>
+          )}
+          {saveStatus === "error" && (
+            <span className="integration-toolbar-error" role="status">
+              Some canvas changes failed to save.
+            </span>
+          )}
+          {selectedContract && (
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={() => {
+                setSelectedNode(null);
+                setPropertiesOpen(true);
               }}
             >
-              <option value="">Select existing contract</option>
-              {landscape.contracts.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} · {item.source.system_name}→{item.target.system_name}
-                </option>
-              ))}
-              {onOpenIntegration && <option value="__new__">Create contract…</option>}
-            </select>
-            {selectedContract && (
-              <span className="integration-contract-context" title="Selected contract context">
-                {selectedContract.source.system_name} · {selectedContract.source.object_name} →{" "}
-                {selectedContract.target.system_name} · {selectedContract.target.object_name}
-                {" · "}
-                {selectedContract.interaction_type}
-              </span>
-            )}
-          </label>
-        )}
-        {saveStatus === "error" && (
-          <span className="integration-toolbar-error" role="status">
-            Some canvas changes failed to save.
-          </span>
-        )}
-        {selectedContract && (
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => {
-              setSelectedNode(null);
-              setPropertiesOpen(true);
-            }}
-          >
-            Properties
-          </button>
-        )}
-        {onOpenCatalog && (
-          <button type="button" className="secondary-button" onClick={onOpenCatalog}>
-            Open catalog
-          </button>
-        )}
+              Properties
+            </button>
+          )}
+          {onOpenCatalog && (
+            <button type="button" className="btn btn--secondary" onClick={onOpenCatalog}>
+              Open catalog
+            </button>
+          )}
+          <div className="more-menu">
+            <button
+              type="button"
+              className="more-menu-trigger"
+              aria-expanded={contractMoreOpen}
+              aria-label="More contract actions"
+              onClick={() => setContractMoreOpen((open) => !open)}
+            >
+              More ⌄
+            </button>
+            <section className="more-menu-panel" hidden={!contractMoreOpen} aria-label="More contract actions">
+              <button
+                type="button"
+                className="more-menu-item"
+                onClick={() => {
+                  integrationLog.info("reload schema requested", {});
+                }}
+              >
+                Reload Schema
+              </button>
+              <button
+                type="button"
+                className="more-menu-item"
+                onClick={() => {
+                  integrationLog.info("preview payload requested", {});
+                }}
+              >
+                Preview Payload
+              </button>
+              <button
+                type="button"
+                className="more-menu-item"
+                onClick={() => {
+                  integrationLog.info("reset layout requested", {});
+                }}
+              >
+                Reset layout
+              </button>
+              <hr className="more-menu-separator" />
+              <button
+                type="button"
+                className="more-menu-item"
+                onClick={() => {
+                  setSelectedNode(null);
+                  setPropertiesOpen(true);
+                }}
+              >
+                Contract properties
+              </button>
+            </section>
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -708,12 +928,12 @@ export default function IntegrationWorkbench({
       )}
 
       <div className="integration-body">
-        <nav className="integration-views" aria-label="Integration views">
+        <nav className="integration-views tabs" aria-label="Integration views">
           {INTEGRATION_VIEWS.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={view === item.id ? "active" : ""}
+              className={`tab${view === item.id ? " active" : ""}`}
               title={item.description}
               onClick={() => {
                 integrationLog.info("view changed", { view: item.id });
@@ -770,6 +990,7 @@ export default function IntegrationWorkbench({
             onOpenCatalog={onOpenCatalog}
             onNavigateTrace={onNavigateTrace}
             onClose={() => setSelectedNode(null)}
+            readOnly={!isEditable}
           />
         )}
       </div>

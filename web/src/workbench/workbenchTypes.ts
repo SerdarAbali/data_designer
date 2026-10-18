@@ -43,6 +43,8 @@ export type ObjectTrace = {
   physical_refs: TraceObjectRef[];
   tests: TraceObjectRef[];
   principles: TraceObjectRef[];
+  /** Evidence stays out of the graph; the inspector reports a bounded count. */
+  evidence_count?: number;
 };
 
 export type ArchitectureGraph = {

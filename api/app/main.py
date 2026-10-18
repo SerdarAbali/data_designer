@@ -2,11 +2,19 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.architecture.baseline import router as architecture_baseline_router
 from app.architecture.enterprise import router as architecture_enterprise_router
+from app.architecture.evidence import router as architecture_evidence_router
 from app.architecture.information import router as architecture_information_router
 from app.architecture.objects import router as architecture_objects_router
 from app.architecture.routes import router as architecture_router
 from app.architecture.solution import router as architecture_solution_router
+from app.architecture.solution_integration import (
+    router as architecture_solution_integration_router,
+)
+from app.architecture.solution_landscape import (
+    router as architecture_solution_landscape_router,
+)
 from app.architecture.traceability import router as architecture_traceability_router
 from app.assistant.routes import internal_router as assistant_internal_router
 from app.assistant.routes import router as assistant_router
@@ -16,6 +24,7 @@ from app.catalog.routes import router as catalog_router
 from app.db import check_database
 from app.helper_actions.routes import router as helper_actions_router
 from app.imports.routes import router as imports_router
+from app.integrations.contract_workbook import router as contract_workbook_router
 from app.integrations.integration_design import router as integration_design_router
 from app.integrations.routes import router as integrations_router
 from app.scenarios.routes import router as scenarios_router
@@ -43,12 +52,17 @@ app.include_router(integrations_router)
 app.include_router(scenarios_router)
 app.include_router(workspaces_router)
 app.include_router(architecture_router)
+app.include_router(architecture_baseline_router)
 app.include_router(architecture_objects_router)
 app.include_router(architecture_information_router)
 app.include_router(architecture_solution_router)
+app.include_router(architecture_solution_integration_router)
+app.include_router(architecture_solution_landscape_router)
 app.include_router(architecture_enterprise_router)
 app.include_router(architecture_traceability_router)
+app.include_router(architecture_evidence_router)
 app.include_router(integration_design_router)
+app.include_router(contract_workbook_router)
 app.include_router(imports_router)
 app.include_router(helper_actions_router)
 app.include_router(assistant_router)

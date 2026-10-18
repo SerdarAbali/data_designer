@@ -131,7 +131,9 @@ function routeIsClear(
 
 /**
  * Builds an orthogonal waypoint list from `source` to `target`. Parallel edges
- * receive a `laneOffset` so relationships sharing a pair stay distinguishable.
+ * receive a `laneOffset` so relationships sharing a pair stay distinguishable,
+ * and `laneShift` moves the connector's bend inside its corridor so connectors
+ * that share a corridor (but not a handle) stop stacking on the same line.
  */
 export function buildRoute(
   source: Point,
@@ -142,6 +144,7 @@ export function buildRoute(
   laneOffset = 0,
   clearance = ROUTE_CLEARANCE,
   endpointBounds?: EndpointBounds,
+  laneShift = 0,
 ): Point[] {
   const sDir = OUTWARD[sourceSide];
   const tDir = OUTWARD[targetSide];
@@ -162,6 +165,30 @@ export function buildRoute(
   if (sHorizontal && tHorizontal) {
     const sourceRect = endpointBounds?.source;
     const targetRect = endpointBounds?.target;
+    // The bend may be pushed into the corridor so two connectors sharing it do
+    // not draw their jogs on top of each other. Clamped inside the corridor so
+    // the run can never reverse.
+    const span = tExit.x - sExit.x;
+    const limit = Math.max(0, span / 2 - clearance);
+    const shift = Math.max(-limit, Math.min(laneShift, limit));
+    const sJog = sExit.x + shift;
+    const tJog = tExit.x - shift;
+    // Preferred shape: a single bend at the midpoint. The lane variants below
+    // bend twice, so when the two handles sit at almost the same height their
+    // two opposing micro-steps read as a wavy connector. One bend keeps the
+    // same handles and stays clear of the same boxes.
+    const midX = (sExit.x + tExit.x) / 2 + shift;
+    if (tJog > sJog) {
+      const stepPoints: Point[] = [
+        source,
+        { x: sExit.x, y: source.y },
+        { x: midX, y: source.y },
+        { x: midX, y: target.y },
+        { x: tExit.x, y: target.y },
+        target,
+      ];
+      if (routeIsClear(stepPoints, obstacles, blockers, clearance)) return stepPoints;
+    }
     const laneCandidates = [
       (source.y + target.y) / 2 + laneOffset,
       Math.min(source.y, target.y) - clearance - offset,
@@ -182,10 +209,10 @@ export function buildRoute(
     const lanes = unique(laneCandidates);
     const build = (lane: number): Point[] => [
       source,
-      { x: sExit.x, y: source.y },
-      { x: sExit.x, y: lane },
-      { x: tExit.x, y: lane },
-      { x: tExit.x, y: target.y },
+      { x: sJog, y: source.y },
+      { x: sJog, y: lane },
+      { x: tJog, y: lane },
+      { x: tJog, y: target.y },
       target,
     ];
     for (const lane of lanes) {
@@ -198,6 +225,24 @@ export function buildRoute(
   if (!sHorizontal && !tHorizontal) {
     const sourceRect = endpointBounds?.source;
     const targetRect = endpointBounds?.target;
+    const span = tExit.y - sExit.y;
+    const limit = Math.max(0, span / 2 - clearance);
+    const shift = Math.max(-limit, Math.min(laneShift, limit));
+    const sJog = sExit.y + shift;
+    const tJog = tExit.y - shift;
+    // Mirrors the horizontal case: one bend instead of two.
+    const midY = (sExit.y + tExit.y) / 2 + shift;
+    if (tJog > sJog) {
+      const stepPoints: Point[] = [
+        source,
+        { x: source.x, y: sExit.y },
+        { x: source.x, y: midY },
+        { x: target.x, y: midY },
+        { x: target.x, y: tExit.y },
+        target,
+      ];
+      if (routeIsClear(stepPoints, obstacles, blockers, clearance)) return stepPoints;
+    }
     const laneCandidates = [
       (source.x + target.x) / 2 + laneOffset,
       Math.min(source.x, target.x) - clearance - offset,
@@ -219,8 +264,8 @@ export function buildRoute(
     const build = (lane: number): Point[] => [
       source,
       { x: source.x, y: sExit.y },
-      { x: lane, y: sExit.y },
-      { x: lane, y: tExit.y },
+      { x: lane, y: sJog },
+      { x: lane, y: tJog },
       { x: target.x, y: tExit.y },
       target,
     ];
@@ -290,14 +335,23 @@ export function roundedOrthogonalPath(points: Point[], radius = ROUTE_RADIUS): s
     const inLength = Math.hypot(corner.x - prev.x, corner.y - prev.y);
     const outLength = Math.hypot(next.x - corner.x, next.y - corner.y);
     const r = Math.min(radius, inLength / 2, outLength / 2);
-    const entry = {
-      x: corner.x - Math.sign(corner.x - prev.x) * r,
-      y: corner.y - Math.sign(corner.y - prev.y) * r,
-    };
-    const exit = {
-      x: corner.x + Math.sign(next.x - corner.x) * r,
-      y: corner.y + Math.sign(next.y - corner.y) * r,
-    };
+    // Step along the real segment directions. Using the sign of each axis
+    // instead would push the curve ends diagonally whenever a segment is only
+    // *nearly* axis-aligned — which happens as soon as a sub-pixel handle
+    // offset survives de-duplication — and that draws a rounded bulge where the
+    // connector should simply run straight.
+    const entry = inLength > 0
+      ? {
+        x: corner.x - ((corner.x - prev.x) / inLength) * r,
+        y: corner.y - ((corner.y - prev.y) / inLength) * r,
+      }
+      : corner;
+    const exit = outLength > 0
+      ? {
+        x: corner.x + ((next.x - corner.x) / outLength) * r,
+        y: corner.y + ((next.y - corner.y) / outLength) * r,
+      }
+      : corner;
     parts.push(`L ${entry.x},${entry.y}`);
     parts.push(`Q ${corner.x},${corner.y} ${exit.x},${exit.y}`);
   }
@@ -327,6 +381,84 @@ export function labelPoint(points: Point[]): Point {
     x: (path[best].x + path[best + 1].x) / 2,
     y: (path[best].y + path[best + 1].y) / 2,
   };
+}
+
+/** Clearance kept between an edge label box and every node rectangle. */
+export const LABEL_CLEARANCE = 8;
+
+/**
+ * The rectangles a label must stay clear of: the other nodes plus the edge's own
+ * endpoint boxes (a label on a handle would sit on top of its own node).
+ */
+export function labelObstacles(
+  obstacles: Rect[] = [],
+  sourceRect?: Rect,
+  targetRect?: Rect,
+): Rect[] {
+  return [
+    ...obstacles,
+    ...(sourceRect ? [sourceRect] : []),
+    ...(targetRect ? [targetRect] : []),
+  ];
+}
+
+/** Rough rendered size of an edge label, used to keep labels off the nodes. */
+export function estimateLabelSize(
+  text: string,
+  fontSize = 10,
+): { width: number; height: number } {
+  return {
+    width: Math.max(28, text.length * fontSize * 0.56 + 16),
+    height: fontSize + 8,
+  };
+}
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+/**
+ * Places an edge label on the routed polyline. The longest segment's midpoint is
+ * preferred, but the anchor slides along the path whenever that point would put
+ * the label behind a node. Deterministic: candidates are walked longest-segment
+ * first, then midpoint before the two shoulder positions.
+ */
+export function labelAnchor(
+  points: Point[],
+  obstacles: Rect[] = [],
+  size: { width: number; height: number } = { width: 0, height: 0 },
+  clearance = LABEL_CLEARANCE,
+): Point {
+  const path = simplifyPoints(points);
+  if (path.length === 0) return { x: 0, y: 0 };
+  if (path.length === 1) return path[0];
+  const candidates: { point: Point; length: number }[] = [];
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const length = Math.hypot(path[i + 1].x - path[i].x, path[i + 1].y - path[i].y);
+    if (length <= 0) continue;
+    for (const ratio of [0.5, 0.35, 0.65]) {
+      candidates.push({
+        point: {
+          x: path[i].x + (path[i + 1].x - path[i].x) * ratio,
+          y: path[i].y + (path[i + 1].y - path[i].y) * ratio,
+        },
+        length,
+      });
+    }
+  }
+  candidates.sort((a, b) => b.length - a.length);
+  const fallback = candidates[0]?.point ?? labelPoint(points);
+  if (obstacles.length === 0 || size.width <= 0) return fallback;
+  for (const candidate of candidates) {
+    const box: Rect = {
+      x: candidate.point.x - size.width / 2 - clearance,
+      y: candidate.point.y - size.height / 2 - clearance,
+      width: size.width + clearance * 2,
+      height: size.height + clearance * 2,
+    };
+    if (!obstacles.some((rect) => rectsOverlap(box, rect))) return candidate.point;
+  }
+  return fallback;
 }
 
 /** A flow-node's position and measured/declared size, for obstacle routing. */

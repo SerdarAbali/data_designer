@@ -9,7 +9,9 @@ import {
 import type { ResolvedRelationship } from "../../architectureCanvasModel";
 import {
   buildRoute,
-  labelPoint,
+  estimateLabelSize,
+  labelAnchor,
+  labelObstacles,
   roundedOrthogonalPath,
   type FlowSide,
   type Rect,
@@ -18,6 +20,10 @@ import {
 export type ArchitectureRelationshipEdgeData = {
   relationship: ResolvedRelationship;
   obstacles: Rect[];
+  sourceRect?: Rect;
+  targetRect?: Rect;
+  /** Corridor lane, so connectors sharing a corridor do not overlap. */
+  laneShift?: number;
   laneIndex: number;
   laneCount: number;
   sourceId: string;
@@ -71,9 +77,16 @@ export default function ArchitectureRelationshipEdge({
     toSide(targetPosition),
     obstacles,
     laneOffset,
+    undefined,
+    undefined,
+    data?.laneShift ?? 0,
   );
   const path = roundedOrthogonalPath(points);
-  const anchor = labelPoint(points);
+  const anchor = labelAnchor(
+    points,
+    labelObstacles(data?.obstacles ?? [], data?.sourceRect, data?.targetRect),
+    estimateLabelSize(String(label ?? "")),
+  );
 
   return (
     <>
@@ -89,7 +102,9 @@ export default function ArchitectureRelationshipEdge({
           <div
             className={`architecture-edge-label${selected ? " selected" : ""}`}
             style={{
-              transform: `translate(-50%, -50%) translate(${anchor.x}px, ${anchor.y}px)`,
+              transform: `translate(-50%, -50%) translate(${anchor.x}px, ${
+                anchor.y + laneOffset
+              }px)`,
             }}
           >
             {label}

@@ -28,7 +28,13 @@ type Props<NodeType extends Node, EdgeType extends Edge> = {
   edgeTypes: EdgeTypes;
   editable: boolean;
   onNodeClick: NodeMouseHandler<NodeType>;
+  onNodeDoubleClick?: NodeMouseHandler<NodeType>;
   onEdgeClick?: EdgeMouseHandler<EdgeType>;
+  /** Hover handlers receive the node/edge itself, not the DOM event. */
+  onNodeMouseEnter?: (node: NodeType) => void;
+  onNodeMouseLeave?: () => void;
+  onEdgeMouseEnter?: (edge: EdgeType) => void;
+  onEdgeMouseLeave?: () => void;
   onNodeDragStop: OnNodeDrag<NodeType>;
   onConnect?: (connection: Connection) => void;
   onPaneClick?: () => void;
@@ -51,7 +57,12 @@ export default function SolutionCanvas<NodeType extends Node, EdgeType extends E
   edgeTypes,
   editable,
   onNodeClick,
+  onNodeDoubleClick,
   onEdgeClick,
+  onNodeMouseEnter,
+  onNodeMouseLeave,
+  onEdgeMouseEnter,
+  onEdgeMouseLeave,
   onNodeDragStop,
   onConnect,
   onPaneClick,
@@ -87,13 +98,19 @@ export default function SolutionCanvas<NodeType extends Node, EdgeType extends E
         edgeTypes={edgeTypes}
         onNodesChange={handleNodesChange}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
         onEdgeClick={onEdgeClick}
+        onNodeMouseEnter={(_event, node) => onNodeMouseEnter?.(node)}
+        onNodeMouseLeave={() => onNodeMouseLeave?.()}
+        onEdgeMouseEnter={(_event, edge) => onEdgeMouseEnter?.(edge)}
+        onEdgeMouseLeave={() => onEdgeMouseLeave?.()}
         onNodeDragStop={onNodeDragStop}
         onConnect={onConnect}
         onPaneClick={onPaneClick}
         nodesConnectable={editable}
         nodesDraggable={editable}
         deleteKeyCode={null}
+        proOptions={{ hideAttribution: true }}
         defaultViewport={defaultViewport}
         onMoveEnd={(_event, viewport) => onViewportChange?.(viewport)}
         fitView={!defaultViewport}

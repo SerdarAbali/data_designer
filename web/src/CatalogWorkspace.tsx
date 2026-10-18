@@ -4,6 +4,7 @@ import ArchitectureCanvas from "./ArchitectureCanvas";
 import IntegrationWorkspace from "./IntegrationWorkspace";
 import type { ScenarioPhase } from "./scenarioModel";
 import WorkspaceSwitcher from "./components/workspaces/WorkspaceSwitcher";
+import WorkspaceNav from "./components/workspaces/WorkspaceNav";
 import type { WorkspaceInfo } from "./architectureTypes";
 import ArchiveImpactDialog, { type ReferencingIntegration } from "./components/catalog/ArchiveImpactDialog";
 import ArchitectureImportDialog from "./components/import/ArchitectureImportDialog";
@@ -16,6 +17,7 @@ import {
   resolveAssistantScope,
   type CanvasScope,
 } from "./assistant/assistantModel";
+import { integrationEnabled } from "./workspace/disciplineScope";
 
 type System = {
   id: string;
@@ -26,6 +28,9 @@ type System = {
   color: string | null;
   position: { x: number; y: number } | null;
   metadata: Record<string, unknown>;
+  lifecycle_stage: string | null;
+  operational_status: string | null;
+  environment_scope: string | null;
 };
 
 type CatalogObject = {
@@ -255,6 +260,15 @@ export default function CatalogWorkspace({
     setAppliedHighlights([]);
   }, [activeWorkspace?.id]);
 
+  // Keep the shell scoped: if Integration is disabled (or removed while the
+  // Contracts view is open), fall back to the Canvas.
+  React.useEffect(() => {
+    if (!activeWorkspace) return;
+    if (activeView === "integrations" && !integrationEnabled(activeWorkspace.disciplines)) {
+      setActiveView("canvas");
+    }
+  }, [activeWorkspace, activeView]);
+
   const refreshObjects = React.useCallback(async (currentSystemId: string, preferId?: string) => {
     const requestId = ++objectsRequest.current;
     if (!currentSystemId) {
@@ -444,6 +458,9 @@ export default function CatalogWorkspace({
           icon: valueOrNull(form.get("icon")),
           color: valueOrNull(form.get("color")),
           position,
+          lifecycle_stage: valueOrNull(form.get("lifecycle_stage")),
+          operational_status: valueOrNull(form.get("operational_status")),
+          environment_scope: valueOrNull(form.get("environment_scope")),
           metadata: objectMetadata(form.get("metadata")),
         }),
       });
@@ -640,8 +657,11 @@ export default function CatalogWorkspace({
 
   return (
     <main className={`workspace studio-workspace view-${activeView}`} aria-busy={transitioning}>
-      <header className="workspace-header">
-        <button type="button" className="studio-home" aria-label="Home - architecture canvas" title="Data Designer" onClick={() => void navigate("canvas")}>D</button>
+      <header className="workspace-header" aria-label="Application header">
+        <div className="workspace-brand-group">
+          <div className="workspace-brand" aria-hidden="true">
+            <h1 title="Collatecht — architecture workbench">Collatecht</h1>
+          </div>
           <WorkspaceSwitcher
             currentWorkspaceName={activeWorkspace?.name ?? tenantName}
             csrfToken={csrfToken}
@@ -651,40 +671,20 @@ export default function CatalogWorkspace({
             onDisciplinesUpdated={() => {
               void refreshWorkspace().catch(() => {});
             }}
+            onExport={() => void exportWorkspace()}
+            exportDisabled={saving || transitioning || !activeWorkspace}
           />
-          <nav className="workspace-nav" aria-label="Workspace">
-            <button
-              type="button"
-              className={activeView === "canvas" ? "nav-tab active" : "nav-tab"}
-              aria-pressed={activeView === "canvas"}
-              onClick={() => void navigate("canvas")}
-            >
-              Canvas
-            </button>
-            {(!activeWorkspace || activeWorkspace.disciplines.includes("integration")) && (
-              <button
-                type="button"
-                className={activeView === "integrations" ? "nav-tab active" : "nav-tab"}
-                aria-pressed={activeView === "integrations"}
-                onClick={() => {
-                  setQuickAddSystemId("");
-                  void navigate("integrations");
-                }}
-              >
-                Contracts
-              </button>
-            )}
-            {(!activeWorkspace || activeWorkspace.disciplines.some((d) => d === "enterprise" || d === "information")) && (
-              <button
-                type="button"
-                className={activeView === "catalog" ? "nav-tab active" : "nav-tab"}
-                aria-pressed={activeView === "catalog"}
-                onClick={() => void navigate("catalog")}
-              >
-                Catalog
-              </button>
-            )}
-          </nav>
+          <WorkspaceNav
+            disciplines={activeWorkspace?.disciplines ?? null}
+            activeView={activeView}
+            busy={transitioning}
+            onNavigate={(view) => {
+              if (view === "integrations") setQuickAddSystemId("");
+              void navigate(view);
+            }}
+          />
+        </div>
+        <div className="workspace-header-actions">
           <label className="studio-search">
             <span aria-hidden="true">⌕</span>
             <input type="search" aria-label="Search workspace" placeholder={activeView === "canvas" ? "Find on canvas…" : activeView === "integrations" ? "Find contract…" : "Search catalog…"} value={studioSearch} onChange={(event) => {
@@ -692,23 +692,25 @@ export default function CatalogWorkspace({
               setCatalogSearch(event.target.value);
             }} />
           </label>
-          <button type="button" className="studio-icon-button" aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} onClick={toggleTheme}>{theme === "light" ? "☾" : "☀"}</button>
           <AssistantLauncher open={assistantOpen} onOpen={() => setAssistantOpen(true)} />
-          <button type="button" className="studio-share" onClick={() => void exportWorkspace()} disabled={saving || transitioning || !activeWorkspace} title="Export this workspace as a shareable bundle">Share</button>
           <details className="workspace-account">
             <summary aria-label="Account menu">
               <span className="account-avatar" aria-hidden="true">{email.slice(0, 1).toUpperCase()}</span>
-              <span>{email}<small>{tenantName}</small></span>
+              <span>{email}</span>
               <span className="account-chevron" aria-hidden="true">⌄</span>
             </summary>
             <div className="account-menu">
               <strong>{email}</strong>
               <small>{tenantName} · Internal workspace</small>
-              <button type="button" className="secondary-button" onClick={onLogout} disabled={loggingOut}>
+              <button type="button" className="btn btn--secondary" onClick={() => void toggleTheme()} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}>
+                {theme === "light" ? "☾ Switch to dark theme" : "☀ Switch to light theme"}
+              </button>
+              <button type="button" className="btn btn--secondary" onClick={onLogout} disabled={loggingOut}>
                 {loggingOut ? "Signing out…" : "Sign out"}
               </button>
             </div>
           </details>
+        </div>
       </header>
 
       {error && activeView !== "catalog" && <ErrorNotice message={error} />}
@@ -746,6 +748,7 @@ export default function CatalogWorkspace({
       {activeView === "integrations" ? (
         <IntegrationWorkspace
           key={activeWorkspace?.id}
+          workspaceId={activeWorkspace?.id}
           registerNavigationGuard={registerContractGuard}
           search={studioSearch}
           onBack={() => void navigate("canvas")}

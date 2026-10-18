@@ -7,7 +7,9 @@ import {
 
 import {
   buildRoute,
-  labelPoint,
+  estimateLabelSize,
+  labelAnchor,
+  labelObstacles,
   roundedOrthogonalPath,
   toFlowSide,
   type Rect,
@@ -15,10 +17,16 @@ import {
 
 export type ProjectionEdgeData = {
   relation: string;
+  /** Dimmed while another connection on the canvas is being traced. */
+  dimmed?: boolean;
+  /** The connection the pointer is on: drawn heavier so it reads as the path. */
+  emphasized?: boolean;
   /** Node rectangles the connector routes around (injected by the canvas shell). */
   obstacles?: Rect[];
   sourceRect?: Rect;
   targetRect?: Rect;
+  /** Corridor lane, so connectors sharing a corridor do not overlap. */
+  laneShift?: number;
 };
 
 export type ProjectionFlowEdge = Edge<ProjectionEdgeData, "informationProjectionEdge">;
@@ -53,24 +61,36 @@ export default function ProjectionEdge({
     0,
     undefined,
     { source: data?.sourceRect, target: data?.targetRect },
+    data?.laneShift ?? 0,
   );
   const path = roundedOrthogonalPath(points);
-  const anchor = labelPoint(points);
   const relation = data?.relation ?? "";
+  const anchor = labelAnchor(
+    points,
+    labelObstacles(data?.obstacles, data?.sourceRect, data?.targetRect),
+    estimateLabelSize(relation, 9),
+  );
   const color = RELATION_COLORS[relation] ?? "var(--discipline-information)";
+  const emphasized = selected || data?.emphasized === true;
   return (
     <>
       <BaseEdge
         id={id}
         path={path}
         markerEnd={markerEnd}
-        style={{ stroke: color, strokeWidth: selected ? 2.2 : 1.4 }}
+        style={{
+          stroke: color,
+          strokeWidth: emphasized ? 2.2 : 1.4,
+          opacity: data?.dimmed ? 0.12 : 1,
+        }}
         interactionWidth={18}
       />
       {relation && (
         <EdgeLabelRenderer>
           <span
-            className="information-projection-edge-label"
+            className={`information-projection-edge-label${emphasized ? " chosen" : ""}${
+              data?.dimmed ? " dimmed" : ""
+            }`}
             data-relation={relation}
             style={{ transform: `translate(-50%, -50%) translate(${anchor.x}px, ${anchor.y}px)` }}
           >

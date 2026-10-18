@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { InformationImpactChange, InformationLineage } from "./informationModel";
 import {
+  assignProjectionLanes,
   filterImpactChanges,
   filterLineage,
   impactObjectTypes,
@@ -45,6 +46,43 @@ describe("layeredLayout", () => {
   it("ignores edges referencing unknown nodes", () => {
     const positions = layeredLayout(["a"], [{ source: "a", target: "missing" }]);
     expect(positions.get("a")).toEqual({ x: 60, y: 60 });
+  });
+});
+
+describe("assignProjectionLanes", () => {
+  const positions = new Map([
+    ["a", { x: 60, y: 60 }],
+    ["b", { x: 60, y: 240 }],
+    ["c", { x: 500, y: 60 }],
+    ["d", { x: 500, y: 240 }],
+  ]);
+
+  it("gives connectors sharing a corridor different lanes", () => {
+    const lanes = assignProjectionLanes(positions, [
+      { id: "e1", source: "a", target: "c" },
+      { id: "e2", source: "b", target: "d" },
+    ]);
+    expect(lanes.get("e1")).toBe(-4.5);
+    expect(lanes.get("e2")).toBe(4.5);
+  });
+
+  it("keeps a lone connector on the corridor centre and stays deterministic", () => {
+    const edges = [
+      { id: "e0", source: "b", target: "d" },
+      { id: "e1", source: "a", target: "c" },
+    ];
+    expect(assignProjectionLanes(positions, [edges[1]])).toEqual(new Map([["e1", 0]]));
+    expect([...assignProjectionLanes(positions, edges).entries()])
+      .toEqual([...assignProjectionLanes(positions, [...edges].reverse()).entries()]);
+  });
+
+  it("does not lane connectors that leave from different columns", () => {
+    const lanes = assignProjectionLanes(positions, [
+      { id: "e1", source: "a", target: "c" },
+      { id: "e2", source: "c", target: "d" },
+    ]);
+    expect(lanes.get("e1")).toBe(0);
+    expect(lanes.get("e2")).toBe(0);
   });
 });
 

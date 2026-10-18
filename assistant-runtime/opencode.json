@@ -258,6 +258,36 @@
           "effect": "allow"
         },
         {
+          "action": "architecture_propose_system_facts",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "architecture_propose_contract_facts",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "architecture_propose_contract_mediator",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "architecture_propose_evidence",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "architecture_propose_solution_contract_association",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "architecture_propose_solution_relationship",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
           "action": "architecture_get_change_set",
           "resource": "*",
           "effect": "allow"

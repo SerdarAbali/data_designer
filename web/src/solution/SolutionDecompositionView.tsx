@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { MarkerType, type Connection, type Viewport } from "@xyflow/react";
 
 import type { ArchitectureState } from "../architectureTypes";
+import { useHoverFocus } from "../components/architecture/useHoverFocus";
 import type { SolutionDesign } from "./solutionModel";
 import { decompositionGraph, interfaceHandle, type Point } from "./solutionCanvasModel";
 import SolutionCanvas from "./SolutionCanvas";
@@ -72,6 +73,13 @@ export default function SolutionDecompositionView({
   toolbar,
 }: Props) {
   const graph = useMemo(() => decompositionGraph(design, state), [design, state]);
+  // Dim everything that is not part of the connection under the pointer.
+  const focusableEdges = useMemo(
+    () => graph.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+    [graph.edges],
+  );
+  const hover = useHoverFocus(focusableEdges);
+  const focus = hover.focus;
 
   const nodes = useMemo<FlowNode[]>(() => {
     const boundary: SolutionBoundaryFlowNode = {
@@ -94,11 +102,13 @@ export default function SolutionDecompositionView({
       position: item.position,
       draggable: editable,
       selected: item.component.object_id === selectedComponentId,
+      className: focus && !focus.nodes.has(item.key) ? "dimmed" : undefined,
       data: {
         component: item.component,
         editable,
         selectedInterfaceId,
         selectedOperationId,
+        portSides: graph.portSides,
         onSelectInterface: (interfaceId: string) => onSelectInterface(item.component.object_id, interfaceId),
         onSelectOperation: (interfaceId: string, operationId: string) =>
           onSelectOperation(item.component.object_id, interfaceId, operationId),
@@ -110,6 +120,7 @@ export default function SolutionDecompositionView({
       position: item.position,
       draggable: false,
       selected: item.repository.object_id === selectedRepositoryId,
+      className: focus && !focus.nodes.has(item.key) ? "dimmed" : undefined,
       data: { repository: item.repository, editable },
     }));
     const externals: SolutionSystemFlowNode[] = graph.externals.map((system) => ({
@@ -117,6 +128,7 @@ export default function SolutionDecompositionView({
       type: "solutionSystem",
       position: system.position,
       draggable: false,
+      className: focus && !focus.nodes.has(system.key) ? "dimmed" : undefined,
       data: {
         name: system.name,
         kind: system.kind,
@@ -128,6 +140,7 @@ export default function SolutionDecompositionView({
     return [boundary, ...components, ...repositories, ...externals];
   }, [
     graph,
+    focus,
     editable,
     selectedComponentId,
     selectedInterfaceId,
@@ -148,9 +161,16 @@ export default function SolutionDecompositionView({
         targetHandle: edge.targetHandle ?? undefined,
         type: "solutionEdge" as const,
         markerEnd: { type: MarkerType.ArrowClosed },
-        data: { kind: edge.kind, label: edge.label, sourceOffset: edge.sourceOffset, targetOffset: edge.targetOffset },
+        data: {
+          kind: edge.kind,
+          label: edge.label,
+          sourceOffset: edge.sourceOffset,
+          targetOffset: edge.targetOffset,
+          emphasized: hover.target.edge === edge.id,
+          dimmed: focus ? !focus.edges.has(edge.id) : false,
+        },
       })),
-    [graph.edges],
+    [graph.edges, focus, hover.target.edge],
   );
 
   return (
@@ -178,6 +198,10 @@ export default function SolutionDecompositionView({
         if (source && target) onConnectInterfaces(source, target);
       }}
       onPaneClick={() => undefined}
+      onNodeMouseEnter={hover.onNodeEnter}
+      onNodeMouseLeave={hover.onLeave}
+      onEdgeMouseEnter={hover.onEdgeEnter}
+      onEdgeMouseLeave={hover.onLeave}
       emptyState={
         <>
           <h3>No components yet</h3>

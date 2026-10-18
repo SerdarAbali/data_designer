@@ -4,7 +4,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.integrations.schemas import (
+    IntegrationEndpointRef,
+    IntegrationFactValue,
+    IntegrationMediatorRef,
+    MediationSource,
+)
+
 StateType = Literal["current", "candidate", "target"]
+BaselineStatus = Literal["draft", "locked"]
 ArchitectureDiscipline = Literal["enterprise", "information", "solution", "integration"]
 ArchitectureObjectKind = Literal[
     "business_requirement",
@@ -51,10 +59,47 @@ class ArchitectureStateResponse(BaseModel):
     name: str
     state_type: str
     description: str | None = None
+    # The Current baseline lifecycle. ``None`` on Candidate and Target states,
+    # where the field carries no meaning.
+    baseline_status: BaselineStatus | None = None
+    baseline_locked_at: datetime | None = None
+    baseline_locked_by: UUID | None = None
     nodes: list[ArchitectureStateNode] = Field(default_factory=list)
     relationships: list[ArchitectureStateRelationship] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class BaselineLockRequest(BaseModel):
+    """The only input a human may send when locking the Current baseline.
+
+    ``validate_only`` lets the lock dialog show the blocking errors and warnings
+    before the user commits, on the same bounded endpoint. Lock metadata is never
+    accepted from a client: the server records the user and the time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_empty: bool = False
+    validate_only: bool = False
+
+
+class BaselineIssue(BaseModel):
+    code: str
+    message: str
+    count: int = 1
+
+
+class BaselineValidation(BaseModel):
+    blocking: list[BaselineIssue] = Field(default_factory=list)
+    warnings: list[BaselineIssue] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class BaselineLockResponse(BaseModel):
+    state: ArchitectureStateResponse
+    validation: BaselineValidation
+    locked: bool
 
 
 class ArchitectureStateCreate(BaseModel):
@@ -530,6 +575,205 @@ class SolutionDesignResponse(BaseModel):
     links: list[SolutionLinkResponse] = Field(default_factory=list)
 
 
+# --- Solution Boundary <-> Integration Contract association -------------------
+# An authoritative, state-aware association. Contract ownership is never inferred
+# from source/target system membership, because an external participating system
+# may sit outside SolutionMember while its Contract still belongs to a solution.
+
+SolutionIntegrationRole = Literal["owned", "participating", "dependency"]
+SolutionIntegrationApplicability = Literal["canonical", "state"]
+
+
+class SolutionIntegrationContractSummary(BaseModel):
+    """The bounded Contract projection the Solution inspector needs.
+
+    Deliberately not the full ``IntegrationContractSummary``: mappings,
+    transformations, scenarios and the resilience/security specification stay in
+    Integration Architecture.
+    """
+
+    id: UUID
+    name: str
+    interaction_type: str
+    implementation_status: str
+    source: IntegrationEndpointRef
+    target: IntegrationEndpointRef
+    mediator: IntegrationMediatorRef | None = None
+    explicit_mediator: bool = False
+    mediated: bool = False
+    mediation_source: MediationSource = "none"
+    evidence_count: int = 0
+    lifecycle_stage: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    operational_status: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    environment_scope: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+
+
+class SolutionIntegrationResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    solution_object_id: UUID
+    integration_id: UUID
+    role: SolutionIntegrationRole
+    description: str | None = None
+    created_in_state_id: UUID | None = None
+    state_applicability: SolutionIntegrationApplicability = "canonical"
+    state_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    contract: SolutionIntegrationContractSummary
+
+
+class SolutionIntegrationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state_id: UUID
+    integration_id: UUID
+    role: SolutionIntegrationRole = "owned"
+    description: str | None = Field(default=None, max_length=500)
+
+
+# --- Solution Landscape --------------------------------------------------------
+# A state-aware read-only projection over the canonical Solution Boundaries. It
+# answers ownership and dependency questions; technical exchange paths remain the
+# Integration Landscape's responsibility, so no Contract internals are duplicated.
+
+SolutionRelationshipType = Literal[
+    "depends_on",
+    "uses",
+    "provides_to",
+    "replaces",
+    "transitions_to",
+    "shares_information_with",
+]
+# ``shares_information_with`` is stored in one canonical direction but is
+# presented symmetrically.
+SYMMETRIC_SOLUTION_RELATIONSHIPS: tuple[str, ...] = ("shares_information_with",)
+
+
+class SolutionLandscapeSystem(BaseModel):
+    system_id: UUID
+    name: str
+    kind: str
+    external: bool = False
+
+
+class SolutionLandscapeContractCounts(BaseModel):
+    owned: int = 0
+    participating: int = 0
+    dependency: int = 0
+    total: int = 0
+
+
+class SolutionLandscapeContractAssociation(BaseModel):
+    association_id: UUID
+    role: SolutionIntegrationRole
+    description: str | None = None
+    state_applicability: SolutionIntegrationApplicability = "canonical"
+    state_name: str | None = None
+    contract_id: UUID
+    contract_name: str | None = None
+    # False when the Contract is archived: surfaced explicitly, never omitted.
+    available: bool = True
+    implementation_status: str | None = None
+    lifecycle_stage: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    operational_status: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    environment_scope: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    evidence_count: int = 0
+
+
+class SolutionLandscapeWarning(BaseModel):
+    code: str
+    message: str
+    solution_object_id: UUID | None = None
+    relationship_id: UUID | None = None
+    association_id: UUID | None = None
+    integration_id: UUID | None = None
+
+
+class SolutionLandscapeNode(BaseModel):
+    solution_object_id: UUID
+    occurrence_id: str | None = None
+    name: str
+    description: str | None = None
+    owner: str | None = None
+    # Solution Boundaries have no fact columns in the implemented fact model, so
+    # these are Unspecified today; the shape is already in place for a later slice.
+    lifecycle_stage: str | None = None
+    operational_status: str | None = None
+    component_count: int = 0
+    member_count: int = 0
+    external_system_count: int = 0
+    members: list[SolutionLandscapeSystem] = Field(default_factory=list)
+    external_systems: list[SolutionLandscapeSystem] = Field(default_factory=list)
+    contract_counts: SolutionLandscapeContractCounts = Field(
+        default_factory=SolutionLandscapeContractCounts
+    )
+    contracts: list[SolutionLandscapeContractAssociation] = Field(default_factory=list)
+    evidence_count: int = 0
+    relationships_in: int = 0
+    relationships_out: int = 0
+
+
+class SolutionLandscapeEdge(BaseModel):
+    id: UUID
+    source_object_id: UUID
+    target_object_id: UUID
+    relationship_type: SolutionRelationshipType
+    description: str | None = None
+    created_in_state_id: UUID | None = None
+    state_applicability: SolutionIntegrationApplicability = "canonical"
+    state_name: str | None = None
+    evidence_count: int = 0
+
+
+class SolutionLandscapeResponse(BaseModel):
+    state_id: UUID
+    state_type: StateType
+    editable: bool
+    solutions: list[SolutionLandscapeNode] = Field(default_factory=list)
+    relationships: list[SolutionLandscapeEdge] = Field(default_factory=list)
+    warnings: list[SolutionLandscapeWarning] = Field(default_factory=list)
+
+
+class SolutionRelationshipCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state_id: UUID
+    source_object_id: UUID
+    target_object_id: UUID
+    relationship_type: SolutionRelationshipType
+    description: str | None = Field(default=None, max_length=500)
+
+
+class SolutionRelationshipUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    relationship_type: SolutionRelationshipType | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+
+class SolutionRelationshipResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    source_object_id: UUID
+    target_object_id: UUID
+    relationship_type: SolutionRelationshipType
+    description: str | None = None
+    created_in_state_id: UUID | None = None
+    state_applicability: SolutionIntegrationApplicability = "canonical"
+    state_name: str | None = None
+    evidence_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class SolutionIntegrationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: SolutionIntegrationRole | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+
 class SolutionCreate(BaseModel):
     state_id: UUID
     name: str = Field(min_length=1, max_length=160)
@@ -876,6 +1120,9 @@ class ObjectTraceResponse(BaseModel):
     physical_refs: list[TraceObjectRef] = Field(default_factory=list)
     tests: list[TraceObjectRef] = Field(default_factory=list)
     principles: list[TraceObjectRef] = Field(default_factory=list)
+    # Evidence stays out of the graph (no nodes, no edges, no layout impact); the
+    # inspector reports how much evidence supports this object instead.
+    evidence_count: int = 0
 
 
 class ArchitectureGraphResponse(BaseModel):
@@ -892,3 +1139,99 @@ class TraceResponse(BaseModel):
     nodes: list[TraceObjectRef] = Field(default_factory=list)
     edges: list[TraceEdge] = Field(default_factory=list)
     depths: dict[str, int] = Field(default_factory=dict)
+
+
+# --- Generic architecture evidence -------------------------------------------
+# Evidence records why an architecture assertion is believed. The target is an
+# exclusive arc: the API speaks in (target_kind, target_id), the table stores one
+# of five real foreign keys. There is deliberately no free-text classification.
+
+EvidenceClassification = Literal[
+    "confirmed_by_requirements_document",
+    "confirmed_by_current_implementation",
+    "confirmed_by_field_mapping",
+    "confirmed_by_user_working_knowledge",
+    "assumption",
+    "open_decision",
+    "future_scope",
+]
+EvidenceSourceType = Literal[
+    "document",
+    "implementation",
+    "mapping",
+    "meeting",
+    "message",
+    "test",
+    "ticket",
+    "repository",
+    "user_statement",
+    "other",
+]
+EvidenceConfidence = Literal["low", "medium", "high"]
+EvidenceVerificationStatus = Literal["unverified", "verified", "disputed", "superseded"]
+EvidenceTargetKind = Literal[
+    "architecture_object",
+    "architecture_relationship",
+    "integration",
+    "integration_dependency",
+    "solution_member",
+]
+EvidenceStateApplicability = Literal["canonical", "state"]
+
+
+class EvidenceCreate(BaseModel):
+    """Create one evidence record against exactly one supported target."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_kind: EvidenceTargetKind
+    target_id: UUID
+    evidence_classification: EvidenceClassification
+    source_type: EvidenceSourceType
+    source_title: str = Field(min_length=1, max_length=300)
+    source_reference: str = Field(min_length=1, max_length=2000)
+    source_locator: str | None = Field(default=None, max_length=2000)
+    summary: str = Field(min_length=1, max_length=2000)
+    confidence: EvidenceConfidence
+    verification_status: EvidenceVerificationStatus = "unverified"
+    created_in_state_id: UUID | None = None
+
+
+class EvidenceUpdate(BaseModel):
+    """Update the evidence metadata only.
+
+    The target, the state applicability and the provenance fields
+    (``recorded_by`` / ``recorded_at``) are intentionally not writable here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_classification: EvidenceClassification | None = None
+    source_type: EvidenceSourceType | None = None
+    source_title: str | None = Field(default=None, min_length=1, max_length=300)
+    source_reference: str | None = Field(default=None, min_length=1, max_length=2000)
+    source_locator: str | None = Field(default=None, max_length=2000)
+    summary: str | None = Field(default=None, min_length=1, max_length=2000)
+    confidence: EvidenceConfidence | None = None
+    verification_status: EvidenceVerificationStatus | None = None
+
+
+class EvidenceResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    target_kind: EvidenceTargetKind
+    target_id: UUID
+    evidence_classification: EvidenceClassification
+    source_type: EvidenceSourceType
+    source_title: str
+    source_reference: str
+    source_locator: str | None = None
+    summary: str
+    confidence: EvidenceConfidence
+    verification_status: EvidenceVerificationStatus
+    recorded_by: UUID
+    recorded_at: datetime
+    updated_at: datetime
+    created_in_state_id: UUID | None = None
+    state_applicability: EvidenceStateApplicability
+    state_name: str | None = None

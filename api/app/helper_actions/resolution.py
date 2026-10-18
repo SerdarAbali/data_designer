@@ -103,6 +103,13 @@ ALLOWED_RESOLUTIONS: dict[str, set[str]] = {
     "create_scenario": {"set_scalar", "remove_operation"},
     "define_conformance_expectation": {"set_scalar", "remove_operation"},
     "reuse_contract": {"remove_operation"},
+    # Slice 7 refinement operations: resolve a registry-backed target or drop it.
+    "set_lifecycle": {"choose_canonical_object", "remove_operation"},
+    "set_operational_status": {"choose_canonical_object", "remove_operation"},
+    "set_environment_scope": {"choose_canonical_object", "remove_operation"},
+    "attach_evidence": {"choose_canonical_object", "remove_operation"},
+    "associate_contract_with_solution": {"choose_canonical_object", "remove_operation"},
+    "create_solution_relationship": {"choose_canonical_object", "remove_operation"},
 }
 
 SCALAR_FIELDS: dict[str, set[str]] = {

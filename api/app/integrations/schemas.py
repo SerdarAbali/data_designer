@@ -12,6 +12,11 @@ from pydantic import (
     model_validator,
 )
 
+from app.architecture.vocabulary import (
+    EnvironmentScope,
+    LifecycleStage,
+    OperationalStatus,
+)
 from app.integrations.graph import GraphDocument
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
@@ -111,8 +116,13 @@ class IntegrationCreate(BaseModel):
     interaction_type: InteractionType = "ONE_WAY"
     pattern: IntegrationPattern | None = None
     implementation_status: ImplementationStatus = "draft"
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
     producer_interface_id: UUID | None = None
     consumer_interface_id: UUID | None = None
+    mediator_system_id: UUID | None = None
+    mediator_responsibility: Annotated[str | None, Field(max_length=300)] = None
     specification: IntegrationSpecification = Field(default_factory=IntegrationSpecification)
     sample_rows: list[SampleRow] = Field(default_factory=list, max_length=100)
 
@@ -143,8 +153,13 @@ class IntegrationUpdate(BaseModel):
     trigger_config: dict[str, JsonValue] | None = None
     pattern: IntegrationPattern | None = None
     implementation_status: ImplementationStatus | None = None
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
     producer_interface_id: UUID | None = None
     consumer_interface_id: UUID | None = None
+    mediator_system_id: UUID | None = None
+    mediator_responsibility: Annotated[str | None, Field(max_length=300)] = None
     specification: IntegrationSpecification | None = None
     sample_rows: list[SampleRow] | None = Field(default=None, max_length=100)
 
@@ -336,8 +351,13 @@ class IntegrationResponse(BaseModel):
     interaction_type: InteractionType
     pattern: IntegrationPattern | None = None
     implementation_status: ImplementationStatus = "draft"
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
     producer_interface_id: UUID | None = None
     consumer_interface_id: UUID | None = None
+    mediator_system_id: UUID | None = None
+    mediator_responsibility: Annotated[str | None, Field(max_length=300)] = None
     specification: IntegrationSpecification = Field(default_factory=IntegrationSpecification)
     sample_rows: list[SampleRow]
     revision: int
@@ -415,6 +435,7 @@ ScenarioConformanceStatus = Literal["passing", "failing", "not_run", "outdated"]
 FlowPhaseName = Literal["request", "success-response", "async-response", "error-response"]
 FlowNodeRole = Literal["validation", "routing", "transformation", "constant"]
 ChannelKind = Literal["api", "event", "file"]
+MediationSource = Literal["explicit", "legacy_endpoint_heuristic", "none"]
 
 
 class IntegrationOperationSummary(BaseModel):
@@ -450,6 +471,95 @@ class IntegrationEndpointRef(BaseModel):
     is_runtime: bool = False
 
 
+class IntegrationInformationRef(BaseModel):
+    """A physical Catalog object a Contract references through its field refs.
+
+    Derived only from ``integration_field_refs`` joined to the Catalog. The
+    "domain" of a Contract is therefore the objectively referenced Catalog
+    objects, never a business domain guessed from object names.
+    """
+
+    object_id: UUID
+    name: str
+    label: str
+    system_id: UUID | None = None
+    system_name: str | None = None
+    anchors: list[str] = Field(default_factory=list)
+
+
+class IntegrationMediatorRef(BaseModel):
+    """The system that mediates a Contract, when one is known.
+
+    A mediator is an overlay on top of the business ``source`` -> ``target``
+    direction: it is never reported as (or substituted for) an endpoint. A
+    mediator resolved from the explicit canonical field sets ``explicit`` true;
+    one resolved from the legacy runtime-endpoint heuristic sets it false so a
+    UI can tell the two apart.
+    """
+
+    system_id: UUID
+    system_name: str
+    system_kind: str | None = None
+    is_runtime: bool = False
+    responsibility: str | None = None
+    explicit: bool = True
+
+
+class IntegrationFactValue(BaseModel):
+    """One generic fact resolved for a specific architecture state.
+
+    ``value`` is the effective value (state override when present, otherwise the
+    canonical baseline). ``canonical`` is always the Current baseline so a UI can
+    show what an override departs from. ``override`` is the raw state value, or
+    ``None`` when the state does not override the fact. ``overridden`` is only
+    true when the state value genuinely differs from the baseline.
+    """
+
+    value: str | None = None
+    canonical: str | None = None
+    override: str | None = None
+    overridden: bool = False
+
+
+class IntegrationFactsResponse(BaseModel):
+    """Read/write shape for a contract's state-specific generic facts."""
+
+    integration_id: UUID
+    state_id: UUID
+    state_type: str
+    editable: bool
+    lifecycle_stage: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    operational_status: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    environment_scope: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    updated_at: str | None = None
+
+
+class IntegrationStateOverrideWrite(BaseModel):
+    """Bounded write for Candidate/Target contract facts.
+
+    Only the three generic facts are writable and only for a non-current state;
+    an explicit ``null`` clears that fact's override. This is deliberately not a
+    generic property-update surface.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    state_id: UUID
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
+
+    @model_validator(mode="after")
+    def at_least_one_fact(self) -> "IntegrationStateOverrideWrite":
+        provided = self.model_fields_set - {"state_id"}
+        if not provided:
+            raise ValueError(
+                "Provide at least one of lifecycle_stage, operational_status,"
+                " environment_scope"
+            )
+        return self
+
+
 class IntegrationContractSummary(BaseModel):
     id: UUID
     name: str
@@ -462,6 +572,10 @@ class IntegrationContractSummary(BaseModel):
     status: ContractStatus = "draft"
     source: IntegrationEndpointRef
     target: IntegrationEndpointRef
+    mediator: IntegrationMediatorRef | None = None
+    explicit_mediator: bool = False
+    mediated: bool = False
+    mediation_source: MediationSource = "none"
     producer_interface: IntegrationInterfaceRef | None = None
     consumer_interface: IntegrationInterfaceRef | None = None
     has_request_graph: bool = False
@@ -472,6 +586,15 @@ class IntegrationContractSummary(BaseModel):
     target_fields_mapped: int = 0
     target_fields_total: int = 0
     scenario_count: int = 0
+    # Evidence stays out of the graph: contract inspection reports the count.
+    evidence_count: int = 0
+    # Derived physical references (stable ids + names) used by Landscape filters.
+    referenced_information_objects: list[IntegrationInformationRef] = Field(
+        default_factory=list
+    )
+    lifecycle_stage: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    operational_status: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
+    environment_scope: IntegrationFactValue = Field(default_factory=IntegrationFactValue)
 
 
 class IntegrationLandscapeResponse(BaseModel):

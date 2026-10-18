@@ -20,7 +20,7 @@ import {
   undoChangeSet,
   validateChangeSet,
 } from "./assistantApi";
-import { buildPreview } from "./assistantPreview";
+import { buildPreview, describeProposalOperation } from "./assistantPreview";
 import {
   LIFECYCLE_LABELS,
   canApply,
@@ -64,6 +64,13 @@ const APPLY_COUNT_GROUPS: { key: string; label: string }[] = [
   { key: "configure_resilience", label: "Resilience" },
   { key: "create_scenario", label: "Scenarios" },
   { key: "define_conformance_expectation", label: "Conformance expectations" },
+  { key: "set_lifecycle", label: "Lifecycle facts" },
+  { key: "set_operational_status", label: "Operational-status facts" },
+  { key: "set_environment_scope", label: "Environment-scope facts" },
+  { key: "set_contract_mediator", label: "Mediators" },
+  { key: "attach_evidence", label: "Evidence" },
+  { key: "associate_contract_with_solution", label: "Solution associations" },
+  { key: "create_solution_relationship", label: "Solution relationships" },
 ];
 
 export interface ProposalPanelProps {
@@ -79,14 +86,40 @@ export interface ProposalPanelProps {
 
 type PendingAction = "approve" | "apply" | "undo" | null;
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
   return (
-    <details className="proposal-section" open>
+    <details className="proposal-section" open={defaultOpen}>
       <summary>{title}</summary>
       <div className="proposal-section-body">{children}</div>
     </details>
   );
 }
+
+type StatusTone = "info" | "success" | "warning" | "danger" | "draft" | "muted";
+
+function lifecycleTone(lifecycle: string): StatusTone {
+  switch (lifecycle) {
+    case "validated":
+    case "ready_for_approval":
+    case "approved":
+    case "applied":
+    case "undo_available":
+      return "success";
+    case "needs_decisions":
+    case "applying":
+      return "draft";
+    case "validation_failed":
+    case "apply_failed":
+    case "undo_conflict":
+    case "stale":
+      return "danger";
+    case "undone":
+      return "muted";
+    default:
+      return "info";
+  }
+}
+
 
 function DecisionControl({
   decision,
@@ -394,55 +427,111 @@ export function ProposalPanel({
     <section className="proposal-panel" data-testid="proposal-panel" data-status={detail.status}>
       <header className="proposal-header">
         <h3>Proposal</h3>
-        <span className="proposal-status" data-lifecycle={lifecycle}>
+        <span
+          className="status-badge proposal-status"
+          data-tone={lifecycleTone(lifecycle)}
+          data-lifecycle={lifecycle}
+          data-testid="proposal-lifecycle"
+        >
           {LIFECYCLE_LABELS[lifecycle]}
         </span>
         {onClose ? (
-          <button type="button" onClick={onClose} aria-label="Close proposal">
-            Close
+          <button type="button" className="side-panel-icon-button" onClick={onClose} aria-label="Close proposal">
+            ✕
           </button>
         ) : null}
       </header>
 
       <p className="proposal-summary">{detail.summary}</p>
+
+      <dl className="proposal-summary-grid" data-testid="proposal-summary">
+        <div>
+          <dt>Target state</dt>
+          <dd>{detail.state_type ?? "unknown"}</dd>
+        </div>
+        <div>
+          <dt>Reused</dt>
+          <dd>{detail.reused_objects.length}</dd>
+        </div>
+        <div>
+          <dt>Proposed</dt>
+          <dd>{detail.proposed_objects.length}</dd>
+        </div>
+        <div>
+          <dt>Decisions</dt>
+          <dd>{detail.unresolved_details?.length ?? 0}</dd>
+        </div>
+        <div>
+          <dt>Readiness</dt>
+          <dd>{validation.ready_for_approval ? "Ready for approval" : unresolvedRequired ? "Required decisions" : "Not validated"}</dd>
+        </div>
+        <div>
+          <dt>Disciplines</dt>
+          <dd>{preview.affectedDisciplines.join(", ") || "—"}</dd>
+        </div>
+      </dl>
+
       <p className="proposal-meta">
-        {detail.helper_name} · {detail.state_type ?? "unknown state"} · hash{" "}
-        {(detail.proposal_hash ?? "").slice(0, 12) || "—"}
+        {detail.helper_name} · hash {(detail.proposal_hash ?? "").slice(0, 12) || "—"}
       </p>
 
-      <div className="proposal-actions">
-        <button
-          type="button"
-          onClick={() => void runValidate()}
-          disabled={busy || !canValidate(detail)}
-        >
-          Validate
-        </button>
-        <button
-          type="button"
-          data-testid="approve-button"
-          onClick={() => setPending("approve")}
-          disabled={busy || !canApprove(detail)}
-        >
-          Approve
-        </button>
-        <button
-          type="button"
-          data-testid="apply-button"
-          onClick={() => setPending("apply")}
-          disabled={busy || !canApply(detail)}
-        >
-          Apply
-        </button>
-        <button
-          type="button"
-          data-testid="undo-button"
-          onClick={() => setPending("undo")}
-          disabled={busy || !canUndo(detail)}
-        >
-          Undo
-        </button>
-        <span className="proposal-ready" data-ready={!unresolvedRequired}>
+      <div className="proposal-action-group">
+        {unresolvedRequired ? (
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void runValidate()}
+            disabled={busy || !canValidate(detail)}
+            data-testid="resolve-decisions-button"
+          >
+            Resolve decisions
+          </button>
+        ) : null}
+        {canValidate(detail) && !unresolvedRequired ? (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={() => void runValidate()}
+            disabled={busy}
+            data-testid="validate-button"
+          >
+            Validate
+          </button>
+        ) : null}
+        {canApprove(detail) ? (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            data-testid="approve-button"
+            onClick={() => setPending("approve")}
+            disabled={busy}
+          >
+            Approve
+          </button>
+        ) : null}
+        {canApply(detail) ? (
+          <button
+            type="button"
+            className="btn btn--primary"
+            data-testid="apply-button"
+            onClick={() => setPending("apply")}
+            disabled={busy}
+          >
+            Apply
+          </button>
+        ) : null}
+        {canUndo(detail) ? (
+          <button
+            type="button"
+            className="btn btn--tertiary"
+            data-testid="undo-button"
+            onClick={() => setPending("undo")}
+            disabled={busy}
+          >
+            Undo
+          </button>
+        ) : null}
+        <span className="proposal-status-chip" data-ready={!unresolvedRequired}>
           {unresolvedRequired ? "Decisions required" : "Ready for review"}
         </span>
       </div>
@@ -454,10 +543,20 @@ export function ProposalPanel({
       ) : null}
 
       {pending ? (
-        <div className="proposal-dialog" role="dialog" aria-modal="true" data-testid="confirm-dialog">
-          <h4>
-            {pending === "approve" ? "Approve proposal?" : pending === "apply" ? "Apply proposal?" : "Undo proposal?"}
-          </h4>
+        <section className="confirm-dialog" role="dialog" aria-modal="true" data-testid="confirm-dialog">
+          <header>
+            <h3>
+              {pending === "approve" ? "Approve proposal?" : pending === "apply" ? "Apply proposal?" : "Undo proposal?"}
+            </h3>
+            <button
+              type="button"
+              className="creation-close"
+              aria-label="Close confirmation"
+              onClick={() => setPending(null)}
+            >
+              ✕
+            </button>
+          </header>
           {pending === "approve" ? (
             <>
               <p>
@@ -504,9 +603,13 @@ export function ProposalPanel({
               </p>
             </>
           ) : null}
-          <div className="proposal-dialog-actions">
+          <div className="confirm-dialog-actions">
+            <button type="button" className="btn btn--secondary" onClick={() => setPending(null)} disabled={busy}>
+              Cancel
+            </button>
             <button
               type="button"
+              className={`btn btn--${pending === "undo" ? "danger" : "primary"}`}
               data-testid="confirm-action"
               onClick={() =>
                 void (pending === "approve" ? runApprove() : pending === "apply" ? runApply() : runUndo())
@@ -515,11 +618,8 @@ export function ProposalPanel({
             >
               Confirm {pending}
             </button>
-            <button type="button" onClick={() => setPending(null)} disabled={busy}>
-              Cancel
-            </button>
           </div>
-        </div>
+        </section>
       ) : null}
 
       {applyResult ? (
@@ -615,7 +715,7 @@ export function ProposalPanel({
         </ul>
       </Section>
 
-      <Section title={`Unresolved decisions (${(detail.unresolved_details ?? []).length})`}>
+      <Section title={`Unresolved decisions (${(detail.unresolved_details ?? []).length})`} defaultOpen={unresolvedRequired}>
         {(detail.unresolved_details ?? []).length === 0 ? (
           <p>No open decisions.</p>
         ) : (
@@ -683,8 +783,18 @@ export function ProposalPanel({
             >
               <code>{operation.domain_action}</code> · {operationLabel(operation)} ·{" "}
               {operation.validation_status}
+              <span className="proposal-operation-detail" data-testid="operation-preview">
+                {describeProposalOperation(operation)}
+              </span>
               {operation.depends_on.length > 0 ? (
                 <span className="proposal-deps"> ← {operation.depends_on.join(", ")}</span>
+              ) : null}
+              {operation.validation_issues.length > 0 ? (
+                <span className="proposal-operation-issues">
+                  {operation.validation_issues
+                    .map((issue) => issue.code ?? issue.message ?? "issue")
+                    .join(", ")}
+                </span>
               ) : null}
             </li>
           ))}

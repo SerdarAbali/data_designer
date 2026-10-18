@@ -1,5 +1,14 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 
+import {
+  ENVIRONMENT_SCOPES,
+  ENVIRONMENT_SCOPE_LABELS,
+  LIFECYCLE_STAGES,
+  LIFECYCLE_LABELS,
+  OPERATIONAL_STATUSES,
+  OPERATIONAL_STATUS_LABELS,
+  UNSPECIFIED_FACT_LABEL,
+} from "../../architectureFacts";
 import CatalogUsagePanel from "./CatalogUsagePanel";
 import InspectorTabs from "./InspectorTabs";
 
@@ -12,6 +21,10 @@ export type InspectorSystem = {
   color: string | null;
   position: { x: number; y: number } | null;
   metadata: Record<string, unknown>;
+  /** Generic facts; `null` means unspecified and is never coerced. */
+  lifecycle_stage: string | null;
+  operational_status: string | null;
+  environment_scope: string | null;
 };
 
 export type InspectorObject = {
@@ -305,6 +318,38 @@ export default function CatalogInspector(props: Props) {
               <label>Kind<input name="kind" required maxLength={100} defaultValue={system.kind} /></label>
             </div>
             <label>Description<textarea name="description" rows={2} defaultValue={system.description ?? ""} /></label>
+            <div className="form-row">
+              <label>Lifecycle stage
+                <select name="lifecycle_stage" defaultValue={system.lifecycle_stage ?? ""}>
+                  <option value="">{UNSPECIFIED_FACT_LABEL}</option>
+                  {LIFECYCLE_STAGES.map((value) => (
+                    <option key={value} value={value}>{LIFECYCLE_LABELS[value]}</option>
+                  ))}
+                </select>
+              </label>
+              <label>Operational status
+                <select name="operational_status" defaultValue={system.operational_status ?? ""}>
+                  <option value="">{UNSPECIFIED_FACT_LABEL}</option>
+                  {OPERATIONAL_STATUSES.map((value) => (
+                    <option key={value} value={value}>{OPERATIONAL_STATUS_LABELS[value]}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="form-row">
+              <label>Environment scope
+                <select name="environment_scope" defaultValue={system.environment_scope ?? ""}>
+                  <option value="">{UNSPECIFIED_FACT_LABEL}</option>
+                  {ENVIRONMENT_SCOPES.map((value) => (
+                    <option key={value} value={value}>{ENVIRONMENT_SCOPE_LABELS[value]}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="muted">
+              Lifecycle, operational status and environment scope describe where the system sits over
+              time. They are separate from architecture state and from a contract's implementation status.
+            </p>
             <details className="catalog-appearance">
               <summary>Appearance (optional)</summary>
               <div className="form-row">

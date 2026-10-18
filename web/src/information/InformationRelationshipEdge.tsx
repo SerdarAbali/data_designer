@@ -8,7 +8,9 @@ import {
 
 import {
   buildRoute,
-  labelPoint,
+  estimateLabelSize,
+  labelAnchor,
+  labelObstacles,
   roundedOrthogonalPath,
   toFlowSide,
   type Rect,
@@ -23,6 +25,8 @@ export type InformationRelationshipEdgeData = {
   obstacles?: Rect[];
   sourceRect?: Rect;
   targetRect?: Rect;
+  /** Corridor lane, so connectors sharing a corridor do not overlap. */
+  laneShift?: number;
 };
 
 export type InformationRelationshipFlowEdge = Edge<
@@ -116,9 +120,14 @@ export default function InformationRelationshipEdge({
     laneOffset,
     undefined,
     { source: data?.sourceRect, target: data?.targetRect },
+    data?.laneShift ?? 0,
   );
   const edgePath = roundedOrthogonalPath(points);
-  const anchor = labelPoint(points);
+  const anchor = labelAnchor(
+    points,
+    labelObstacles(data?.obstacles, data?.sourceRect, data?.targetRect),
+    estimateLabelSize(data?.relationship?.name ?? ""),
+  );
   let labelX = anchor.x;
   let labelY = anchor.y;
 

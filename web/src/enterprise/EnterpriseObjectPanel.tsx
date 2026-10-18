@@ -238,18 +238,9 @@ export default function EnterpriseObjectPanel({
       )}
 
       {editable && (
-        <div className="solution-panel-actions">
-          <button type="button" disabled={!dirty || busy || !name.trim()} onClick={save}>
-            {busy ? "Saving…" : "Save object"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button architecture-danger"
-            onClick={() => onDelete(object.object_id)}
-          >
-            Delete
-          </button>
-        </div>
+        <p className="inspector-field-help">
+          Unsaved changes are kept in this panel until you save them.
+        </p>
       )}
     </>
   );
@@ -369,6 +360,54 @@ export default function EnterpriseObjectPanel({
         { id: "relationships", label: "Relationships", count: connections.length, content: relationshipsPanel },
         { id: "traceability", label: "Traceability", content: trace ?? <p className="muted">Traceability is unavailable.</p> },
       ]}
+      manageMenu={editable ? (
+        <>
+          <hr className="more-menu-separator" />
+          <button
+            type="button"
+            className="more-menu-item more-menu-item--danger"
+            onClick={() => {
+              if (window.confirm(`Delete ${object.name}? This removes the object and its links from the model.`)) {
+                onDelete(object.object_id);
+              }
+            }}
+          >
+            Delete object
+          </button>
+        </>
+      ) : undefined}
+      footer={editable ? (
+        <div className="inspector-form-actions">
+          {dirty && (
+            <button
+              type="button"
+              className="btn btn--secondary"
+              disabled={busy}
+              onClick={() => {
+                setName(object.name);
+                setDescription(object.description ?? "");
+                setOwner(object.owner ?? "");
+                setOutcomeMetric(object.outcome_metric ?? "");
+                setHorizon(object.horizon ?? "");
+                setProcessType(object.process_type ?? "");
+                setPrincipleType(object.principle_type ?? "");
+                setRationale(object.rationale ?? "");
+                setRoleType(object.role_type ?? "");
+              }}
+            >
+              Reset
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={!dirty || busy || !name.trim()}
+            onClick={save}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      ) : undefined}
     />
   );
 }

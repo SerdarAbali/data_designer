@@ -25,6 +25,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
+from app.architecture.evidence import EVIDENCE_TARGET_COLUMNS
 from app.architecture.information import ER_EDGE_TYPE, REALIZES_EDGE_TYPE
 from app.architecture.solution import (
     CONNECTS_TO,
@@ -42,6 +43,7 @@ from app.integrations.graph import (
 )
 from app.integrations.routes import graph_references
 from app.models import (
+    ArchitectureEvidence,
     ArchitectureInterface,
     ArchitectureObject,
     ArchitecturePrinciple,
@@ -53,6 +55,7 @@ from app.models import (
     BusinessProcess,
     BusinessRequirement,
     CatalogField,
+    CatalogSystem,
     DataRepository,
     DeploymentNode,
     HelperChangeOperation,
@@ -61,11 +64,13 @@ from app.models import (
     InformationObject,
     Integration,
     IntegrationFieldRef,
+    IntegrationStateOverride,
     InterfaceOperation,
     OrganizationRole,
     Scenario,
     SolutionBoundary,
     SolutionComponent,
+    SolutionIntegration,
     TrustBoundary,
 )
 from app.scenarios.routes import document_json, validate_for_save
@@ -161,10 +166,27 @@ KNOWN_ACTIONS = frozenset(
         "configure_resilience",
         "create_scenario",
         "define_conformance_expectation",
+        "set_lifecycle",
+        "set_operational_status",
+        "set_environment_scope",
+        "set_contract_mediator",
+        "attach_evidence",
+        "associate_contract_with_solution",
+        "create_solution_relationship",
     }
 )
 
 INTERACTION_RELATIONSHIP = "interacts_with"
+
+# The approved Solution-to-Solution vocabulary.
+SOLUTION_RELATIONSHIP_TYPES = (
+    "depends_on",
+    "uses",
+    "provides_to",
+    "replaces",
+    "transitions_to",
+    "shares_information_with",
+)
 
 _PHASE_DIRECTIONS = {
     "request": ("source", "target"),
@@ -803,11 +825,42 @@ class DomainWriter:
     def create_contract(self, op: HelperChangeOperation) -> dict[str, Any]:
         pv = op.proposed_value or {}
         specification = pv.get("specification") or {}
+        # The proposal already carries the runtime decision; apply persists it as
+        # the canonical explicit mediator. Nothing is inferred from free text and
+        # the runtime flag is never re-derived:
+        #   runtime_mediated true + runtime_system_id present -> mediator set
+        #   runtime_mediated false                              -> mediator null
+        source_system_id = _as_uuid(pv.get("source_system_id"))
+        target_system_id = _as_uuid(pv.get("target_system_id"))
+        mediator_system_id = None
+        mediator_responsibility = None
+        if pv.get("runtime_mediated"):
+            mediator_system_id = _as_uuid(pv.get("runtime_system_id"))
+            if mediator_system_id is not None:
+                if mediator_system_id in (source_system_id, target_system_id):
+                    raise _conflict(
+                        "mediator_is_endpoint",
+                        "The mediator cannot be the contract source or target",
+                    )
+                system = self.db.scalar(
+                    select(CatalogSystem).where(
+                        CatalogSystem.id == mediator_system_id,
+                        CatalogSystem.tenant_id == self.ctx.tenant_id,
+                        CatalogSystem.deleted_at.is_(None),
+                    )
+                )
+                if system is None:
+                    raise _conflict(
+                        "unknown_mediator", "The mediator is not an active system"
+                    )
+                responsibility = pv.get("runtime_responsibility")
+                if responsibility and responsibility != "Not defined.":
+                    mediator_responsibility = responsibility
         contract = Integration(
             tenant_id=self.ctx.tenant_id,
-            source_system_id=_as_uuid(pv.get("source_system_id")),
+            source_system_id=source_system_id,
             source_object_id=_as_uuid(pv.get("source_object_id")),
-            target_system_id=_as_uuid(pv.get("target_system_id")),
+            target_system_id=target_system_id,
             target_object_id=_as_uuid(pv.get("target_object_id")),
             name=str(pv.get("name", "")).strip(),
             description=pv.get("description"),
@@ -821,6 +874,8 @@ class DomainWriter:
             implementation_status=pv.get("implementation_status") or "draft",
             producer_interface_id=_as_uuid(pv.get("producer_interface_id")),
             consumer_interface_id=_as_uuid(pv.get("consumer_interface_id")),
+            mediator_system_id=mediator_system_id,
+            mediator_responsibility=mediator_responsibility,
             specification=specification,
             sample_rows=[],
             revision=1,
@@ -844,6 +899,357 @@ class DomainWriter:
             "ownership": ownership,
             "post_fingerprint": {"contract_id": str(contract.id), "revision": 1},
             "result": {"contract_id": str(contract.id), "revision": 1},
+        }
+
+    # -- Slice 7 refinement operations ---------------------------------------
+
+    def _set_fact(self, op: HelperChangeOperation) -> dict[str, Any]:
+        """Write a Candidate/Target fact override. Canonical Current is untouched."""
+        pv = op.proposed_value or {}
+        kind = pv.get("kind")
+        field = pv.get("field")
+        changes = dict(pv.get("changes") or {})
+        if field not in changes:
+            raise _conflict("nothing_to_override", "The fact operation carries no change")
+        value = changes[field]
+        if kind == "catalog_system":
+            object_id = op.target_id
+            if object_id is None:
+                raise _conflict("unknown_target", "The Catalog system did not resolve")
+            system = self.db.scalar(
+                select(CatalogSystem).where(
+                    CatalogSystem.id == object_id,
+                    CatalogSystem.tenant_id == self.ctx.tenant_id,
+                )
+            )
+            if system is None or system.deleted_at is not None:
+                raise _conflict("unknown_target", "The Catalog system is not active")
+            member, created = self._ensure_member(object_id)
+            prior = dict(member.property_overrides or {})
+            merged = dict(prior)
+            merged[field] = value
+            if value is None:
+                merged.pop(field, None)
+            member.membership = "included"
+            member.property_overrides = merged
+            self.db.flush()
+            ownership = {
+                "role": "overridden",
+                "kind": "catalog_system",
+                "object_id": str(object_id),
+                "state_id": str(self.state.id),
+                "storage": "member",
+                "member_id": str(member.id),
+                "member_created": created,
+                "field": field,
+                "applied": _json_value({field: value}),
+                "prior": {field: prior.get(field)},
+                "prior_present": {field: field in prior},
+                "reused": True,
+            }
+            return {
+                "applied_id": object_id,
+                "ownership": ownership,
+                "post_fingerprint": {"field": field, "value": value},
+                "result": {"kind": kind, "field": field, "object_id": str(object_id)},
+            }
+
+        if kind == "contract":
+            integration_id = op.target_id
+            if integration_id is None:
+                raise _conflict("unknown_target", "The Contract did not resolve")
+            contract = self.db.scalar(
+                select(Integration).where(
+                    Integration.id == integration_id,
+                    Integration.tenant_id == self.ctx.tenant_id,
+                )
+            )
+            if contract is None or contract.deleted_at is not None:
+                raise _conflict("unknown_target", "The Contract is not active")
+            override = self.db.scalar(
+                select(IntegrationStateOverride).where(
+                    IntegrationStateOverride.tenant_id == self.ctx.tenant_id,
+                    IntegrationStateOverride.state_id == self.state.id,
+                    IntegrationStateOverride.integration_id == integration_id,
+                )
+            )
+            created = override is None
+            if override is None:
+                override = IntegrationStateOverride(
+                    tenant_id=self.ctx.tenant_id,
+                    state_id=self.state.id,
+                    integration_id=integration_id,
+                )
+                self.db.add(override)
+            prior = getattr(override, field, None)
+            setattr(override, field, value)
+            override.updated_at = datetime.now(UTC)
+            self.db.flush()
+            ownership = {
+                "role": "overridden",
+                "kind": "contract_fact",
+                "integration_id": str(integration_id),
+                "state_id": str(self.state.id),
+                "storage": "integration_override",
+                "override_id": str(override.id),
+                "override_created": created,
+                "field": field,
+                "applied": _json_value({field: value}),
+                "prior": {field: prior},
+                "prior_present": {field: prior is not None},
+                "reused": True,
+            }
+            return {
+                "applied_id": integration_id,
+                "ownership": ownership,
+                "post_fingerprint": {"field": field, "value": value},
+                "result": {"kind": kind, "field": field, "contract_id": str(integration_id)},
+            }
+
+        raise _conflict("unsupported_kind", f"Cannot set facts on kind {kind!r}")
+
+    def set_lifecycle(self, op: HelperChangeOperation) -> dict[str, Any]:
+        return self._set_fact(op)
+
+    def set_operational_status(self, op: HelperChangeOperation) -> dict[str, Any]:
+        return self._set_fact(op)
+
+    def set_environment_scope(self, op: HelperChangeOperation) -> dict[str, Any]:
+        return self._set_fact(op)
+
+    def set_contract_mediator(self, op: HelperChangeOperation) -> dict[str, Any]:
+        """Re-check the canonical mediator preconditions, then write them."""
+        from app.helper_actions.refinement_proposals import contract_used_by_current
+
+        pv = op.proposed_value or {}
+        contract_id = op.target_id
+        if contract_id is None:
+            raise _conflict("unknown_target", "The Contract did not resolve")
+        contract = self.db.scalar(
+            select(Integration).where(
+                Integration.id == contract_id,
+                Integration.tenant_id == self.ctx.tenant_id,
+            )
+        )
+        if contract is None or contract.deleted_at is not None:
+            raise _conflict("unknown_target", "The Contract is not active")
+        if contract_used_by_current(self.ctx, contract.id):
+            raise _conflict(
+                "mediator_affects_current",
+                "This Contract is described by the read-only Current state",
+            )
+        mediator_id = _as_uuid(pv.get("mediator_system_id"))
+        mediator = self.db.scalar(
+            select(CatalogSystem).where(
+                CatalogSystem.id == mediator_id,
+                CatalogSystem.tenant_id == self.ctx.tenant_id,
+            )
+        )
+        if mediator is None or mediator.deleted_at is not None:
+            raise _conflict("unknown_mediator", "The mediator is not active")
+        if mediator.id in (contract.source_system_id, contract.target_system_id):
+            raise _conflict("mediator_is_endpoint", "The mediator cannot be an endpoint")
+        prior = {
+            "mediator_system_id": str(contract.mediator_system_id)
+            if contract.mediator_system_id
+            else None,
+            "mediator_responsibility": contract.mediator_responsibility,
+        }
+        contract.mediator_system_id = mediator.id
+        contract.mediator_responsibility = pv.get("mediator_responsibility")
+        contract.revision += 1
+        contract.updated_at = datetime.now(UTC)
+        self.db.flush()
+        ownership = {
+            "role": "modified",
+            "kind": "contract_mediator",
+            "contract_id": str(contract.id),
+            "state_id": str(self.state.id),
+            "applied": {
+                "mediator_system_id": str(mediator.id),
+                "mediator_responsibility": pv.get("mediator_responsibility"),
+            },
+            "prior": prior,
+            "reused": True,
+        }
+        return {
+            "applied_id": contract.id,
+            "ownership": ownership,
+            "post_fingerprint": {"mediator_system_id": str(mediator.id)},
+            "result": {"contract_id": str(contract.id), "mediator_system_id": str(mediator.id)},
+        }
+
+    def attach_evidence(self, op: HelperChangeOperation) -> dict[str, Any]:
+        """Create state-scoped evidence with server-owned provenance."""
+        pv = op.proposed_value or {}
+        target_kind = pv.get("target_kind")
+        column = EVIDENCE_TARGET_COLUMNS.get(target_kind)
+        if column is None:
+            raise _conflict("unsupported_evidence_target", "Unsupported evidence target")
+        target_id = _as_uuid(pv.get("target_id")) or op.target_id
+        if target_id is None:
+            raise _conflict("missing_target", "Evidence needs a target")
+        evidence = ArchitectureEvidence(
+            tenant_id=self.ctx.tenant_id,
+            evidence_classification=pv.get("evidence_classification"),
+            source_type=pv.get("source_type"),
+            source_title=pv.get("source_title"),
+            source_reference=pv.get("source_reference"),
+            source_locator=pv.get("source_locator"),
+            summary=pv.get("summary"),
+            confidence=pv.get("confidence"),
+            verification_status=pv.get("verification_status") or "unverified",
+            # Provenance is never taken from the proposal.
+            recorded_by=self.ctx.user.id,
+            created_in_state_id=self.state.id,
+        )
+        setattr(evidence, column, target_id)
+        self.db.add(evidence)
+        self.db.flush()
+        ownership = {
+            "role": "created",
+            "kind": "evidence",
+            "evidence_id": str(evidence.id),
+            "state_id": str(self.state.id),
+            "target_kind": target_kind,
+            "target_id": str(target_id),
+            "reused": False,
+        }
+        return {
+            "applied_id": evidence.id,
+            "ownership": ownership,
+            "post_fingerprint": {"evidence": _evidence_fingerprint(evidence)},
+            "result": {"evidence_id": str(evidence.id), "target_kind": target_kind},
+        }
+
+    def associate_contract_with_solution(self, op: HelperChangeOperation) -> dict[str, Any]:
+        pv = op.proposed_value or {}
+        solution_object_id = _as_uuid(pv.get("solution_object_id")) or op.target_id
+        integration_id = _as_uuid(pv.get("integration_id"))
+        if solution_object_id is None or integration_id is None:
+            raise _conflict("missing_target", "The association endpoints did not resolve")
+        boundary = self.db.scalar(
+            select(SolutionBoundary).where(
+                SolutionBoundary.object_id == solution_object_id,
+                SolutionBoundary.tenant_id == self.ctx.tenant_id,
+            )
+        )
+        if boundary is None:
+            raise _conflict("unknown_solution", "The Solution Boundary was not found")
+        contract = self.db.scalar(
+            select(Integration).where(
+                Integration.id == integration_id,
+                Integration.tenant_id == self.ctx.tenant_id,
+            )
+        )
+        if contract is None or contract.deleted_at is not None:
+            raise _conflict("unknown_contract", "The Contract is not active")
+        existing = self.db.scalar(
+            select(SolutionIntegration).where(
+                SolutionIntegration.tenant_id == self.ctx.tenant_id,
+                SolutionIntegration.solution_object_id == solution_object_id,
+                SolutionIntegration.integration_id == integration_id,
+                SolutionIntegration.created_in_state_id == self.state.id,
+            )
+        )
+        if existing is not None:
+            raise _conflict(
+                "duplicate_solution_association",
+                "This Contract is already associated with this solution here",
+            )
+        association = SolutionIntegration(
+            id=uuid4(),
+            tenant_id=self.ctx.tenant_id,
+            solution_object_id=solution_object_id,
+            integration_id=integration_id,
+            role=pv.get("role") or "owned",
+            description=pv.get("description"),
+            created_in_state_id=self.state.id,
+        )
+        self.db.add(association)
+        self.db.flush()
+        ownership = {
+            "role": "created",
+            "kind": "solution_integration",
+            "association_id": str(association.id),
+            "state_id": str(self.state.id),
+            "solution_object_id": str(solution_object_id),
+            "integration_id": str(integration_id),
+            "applied": {"role": association.role, "description": association.description},
+            "reused": False,
+        }
+        return {
+            "applied_id": association.id,
+            "ownership": ownership,
+            "post_fingerprint": {
+                "association_id": str(association.id),
+                "role": association.role,
+                "description": association.description,
+            },
+            "result": {
+                "association_id": str(association.id),
+                "solution_object_id": str(solution_object_id),
+                "integration_id": str(integration_id),
+            },
+        }
+
+    def create_solution_relationship(self, op: HelperChangeOperation) -> dict[str, Any]:
+        pv = op.proposed_value or {}
+        source_id = _as_uuid(pv.get("source_object_id"))
+        target_id = _as_uuid(pv.get("target_object_id"))
+        relationship_type = pv.get("relationship_type")
+        if source_id is None or target_id is None:
+            raise _conflict("missing_endpoint", "Both Solutions are required")
+        if source_id == target_id:
+            raise _conflict("self_relationship", "A Solution cannot relate to itself")
+        if relationship_type not in SOLUTION_RELATIONSHIP_TYPES:
+            raise _conflict("invalid_relationship_type", "Unsupported relationship type")
+        for endpoint in (source_id, target_id):
+            registry = self._registry(endpoint)
+            if registry is None or registry.kind != "solution_boundary":
+                raise _conflict("unknown_solution", "A Solution Boundary was not found")
+        existing = self.db.scalar(
+            select(ArchitectureRelationship).where(
+                ArchitectureRelationship.tenant_id == self.ctx.tenant_id,
+                ArchitectureRelationship.source_object_id == source_id,
+                ArchitectureRelationship.target_object_id == target_id,
+                ArchitectureRelationship.relationship_type == relationship_type,
+            )
+        )
+        if existing is not None:
+            raise _conflict(
+                "duplicate_solution_relationship",
+                "These two Solutions already have this relationship type",
+            )
+        description = pv.get("description")
+        properties = {"description": description} if description else {}
+        relationship = ArchitectureRelationship(
+            id=uuid4(),
+            tenant_id=self.ctx.tenant_id,
+            source_object_id=source_id,
+            target_object_id=target_id,
+            relationship_type=relationship_type,
+            properties=properties,
+            created_in_state_id=self.state.id,
+        )
+        self.db.add(relationship)
+        self.db.flush()
+        ownership = {
+            "role": "linked",
+            "kind": "solution_relationship",
+            "relationship_id": str(relationship.id),
+            "state_id": str(self.state.id),
+            "properties": _json_value(properties),
+            "reused": False,
+        }
+        return {
+            "applied_id": relationship.id,
+            "ownership": ownership,
+            "post_fingerprint": {"relationship_id": str(relationship.id)},
+            "result": {
+                "relationship_id": str(relationship.id),
+                "relationship_type": relationship_type,
+            },
         }
 
     def create_mapping(self, op: HelperChangeOperation) -> dict[str, Any]:
@@ -1515,8 +1921,24 @@ def _affected_workbenches(operations: list[HelperChangeOperation]) -> list[str]:
             "configure_resilience",
             "create_scenario",
             "define_conformance_expectation",
+            "set_contract_mediator",
         }:
             workbenches.add("integration")
+        if op.domain_action == "attach_evidence":
+            workbenches.add("evidence")
+        if op.domain_action in {
+            "associate_contract_with_solution",
+            "create_solution_relationship",
+        }:
+            workbenches.add("solution")
+        if op.domain_action in {
+            "set_lifecycle",
+            "set_operational_status",
+            "set_environment_scope",
+        }:
+            workbenches.add(
+                "integration" if (op.proposed_value or {}).get("kind") == "contract" else "catalog"
+            )
     return sorted(workbenches)
 
 
@@ -1536,6 +1958,13 @@ _DISPATCH = {
     "configure_resilience": DomainWriter.configure_resilience,
     "create_scenario": DomainWriter.create_scenario,
     "define_conformance_expectation": DomainWriter.define_conformance_expectation,
+    "set_lifecycle": DomainWriter.set_lifecycle,
+    "set_operational_status": DomainWriter.set_operational_status,
+    "set_environment_scope": DomainWriter.set_environment_scope,
+    "set_contract_mediator": DomainWriter.set_contract_mediator,
+    "attach_evidence": DomainWriter.attach_evidence,
+    "associate_contract_with_solution": DomainWriter.associate_contract_with_solution,
+    "create_solution_relationship": DomainWriter.create_solution_relationship,
 }
 
 
@@ -1602,6 +2031,44 @@ def _external_object_reference(
     return None
 
 
+#: Evidence columns that undo compares: a later metadata edit is a conflict.
+def req_fact_fields() -> tuple[str, ...]:
+    """The three state-overridable Contract facts."""
+    return ("lifecycle_stage", "operational_status", "environment_scope")
+
+
+_EVIDENCE_FINGERPRINT_FIELDS = (
+    "evidence_classification",
+    "source_type",
+    "source_title",
+    "source_reference",
+    "source_locator",
+    "summary",
+    "confidence",
+    "verification_status",
+)
+
+
+def _evidence_fingerprint(evidence: ArchitectureEvidence) -> dict[str, Any]:
+    return {field: getattr(evidence, field) for field in _EVIDENCE_FINGERPRINT_FIELDS}
+
+
+def _blocking_evidence(ctx: HelperContext, target_kind: str, target_id: UUID | None) -> bool:
+    """True when evidence now supports a row this change set wants to remove."""
+    column = EVIDENCE_TARGET_COLUMNS.get(target_kind)
+    if column is None or target_id is None:
+        return False
+    return (
+        ctx.db.scalar(
+            select(ArchitectureEvidence.id).where(
+                ArchitectureEvidence.tenant_id == ctx.tenant_id,
+                getattr(ArchitectureEvidence, column) == target_id,
+            )
+        )
+        is not None
+    )
+
+
 def _build_undo_plan(
     ctx: HelperContext,
     change_set: HelperChangeSet,
@@ -1662,6 +2129,27 @@ def _build_undo_plan(
                         "message": "The overridden value changed after apply",
                     }
                 )
+        elif role == "modified" and kind == "contract_mediator":
+            contract = ctx.db.get(Integration, _as_uuid(ownership.get("contract_id")))
+            if contract is None:
+                step["action"] = "skip"
+            else:
+                current = {
+                    "mediator_system_id": str(contract.mediator_system_id)
+                    if contract.mediator_system_id
+                    else None,
+                    "mediator_responsibility": contract.mediator_responsibility,
+                }
+                if current != (ownership.get("applied") or {}):
+                    conflicts.append(
+                        {
+                            "operation_id": op.operation_id,
+                            "code": "mediator_modified",
+                            "message": "The mediator changed after apply",
+                        }
+                    )
+                else:
+                    step["action"] = "restore_mediator"
         elif role == "linked":
             relationship_id = _as_uuid(ownership.get("relationship_id"))
             edge = ctx.db.get(ArchitectureRelationship, relationship_id)
@@ -1673,6 +2161,14 @@ def _build_undo_plan(
                         "operation_id": op.operation_id,
                         "code": "relationship_modified",
                         "message": "The relationship changed after apply",
+                    }
+                )
+            elif _blocking_evidence(ctx, "architecture_relationship", relationship_id):
+                conflicts.append(
+                    {
+                        "operation_id": op.operation_id,
+                        "code": "evidence_blocks_undo",
+                        "message": "Evidence now supports this relationship",
                     }
                 )
             else:
@@ -1738,6 +2234,39 @@ def _build_undo_plan(
                 )
             else:
                 step["action"] = "delete_scenario"
+        elif role == "created" and kind == "evidence":
+            evidence = ctx.db.get(ArchitectureEvidence, _as_uuid(ownership.get("evidence_id")))
+            if evidence is None:
+                step["action"] = "skip"
+            elif _evidence_fingerprint(evidence) != (op.post_fingerprint or {}).get("evidence"):
+                conflicts.append(
+                    {
+                        "operation_id": op.operation_id,
+                        "code": "evidence_modified",
+                        "message": "The created evidence was changed after apply",
+                    }
+                )
+            else:
+                step["action"] = "delete_evidence"
+        elif role == "created" and kind == "solution_integration":
+            association = ctx.db.get(
+                SolutionIntegration, _as_uuid(ownership.get("association_id"))
+            )
+            if association is None:
+                step["action"] = "skip"
+            elif {
+                "role": association.role,
+                "description": association.description,
+            } != (ownership.get("applied") or {}):
+                conflicts.append(
+                    {
+                        "operation_id": op.operation_id,
+                        "code": "association_modified",
+                        "message": "The created association was changed after apply",
+                    }
+                )
+            else:
+                step["action"] = "delete_association"
         plan.append(step)
     if conflicts:
         raise UndoConflict(conflicts)
@@ -1794,6 +2323,18 @@ def _current_override_value(
 ) -> dict[str, Any]:
     applied = ownership.get("applied") or {}
     object_id = _as_uuid(ownership.get("object_id"))
+    if ownership.get("storage") == "integration_override":
+        override = ctx.db.scalar(
+            select(IntegrationStateOverride).where(
+                IntegrationStateOverride.tenant_id == ctx.tenant_id,
+                IntegrationStateOverride.state_id == change_set.state_id,
+                IntegrationStateOverride.integration_id
+                == _as_uuid(ownership.get("integration_id")),
+            )
+        )
+        if override is None:
+            return {key: None for key in applied}
+        return {key: getattr(override, key, None) for key in applied}
     if ownership.get("storage") == "node":
         state = get_state(ctx.db, ctx.workspace, change_set.state_id)
         for node in state.nodes:
@@ -1847,6 +2388,24 @@ def _execute_undo_step(
         scenario = ctx.db.get(Scenario, _as_uuid(ownership.get("scenario_id")))
         if scenario is not None:
             ctx.db.delete(scenario)
+    elif kind == "evidence":
+        evidence = ctx.db.get(ArchitectureEvidence, _as_uuid(ownership.get("evidence_id")))
+        if evidence is not None:
+            ctx.db.delete(evidence)
+    elif kind == "solution_integration":
+        association = ctx.db.get(
+            SolutionIntegration, _as_uuid(ownership.get("association_id"))
+        )
+        if association is not None:
+            ctx.db.delete(association)
+    elif kind == "contract_mediator":
+        contract = ctx.db.get(Integration, _as_uuid(ownership.get("contract_id")))
+        if contract is not None:
+            prior = ownership.get("prior") or {}
+            contract.mediator_system_id = _as_uuid(prior.get("mediator_system_id"))
+            contract.mediator_responsibility = prior.get("mediator_responsibility")
+            contract.revision += 1
+            contract.updated_at = datetime.now(UTC)
     ctx.db.flush()
 
 
@@ -1898,6 +2457,23 @@ def _restore_override(
     prior = ownership.get("prior") or {}
     prior_present = ownership.get("prior_present") or {}
     object_id = _as_uuid(ownership.get("object_id"))
+    if ownership.get("storage") == "integration_override":
+        override = ctx.db.scalar(
+            select(IntegrationStateOverride).where(
+                IntegrationStateOverride.tenant_id == ctx.tenant_id,
+                IntegrationStateOverride.state_id == change_set.state_id,
+                IntegrationStateOverride.integration_id
+                == _as_uuid(ownership.get("integration_id")),
+            )
+        )
+        if override is None:
+            return
+        for key in applied:
+            setattr(override, key, prior.get(key) if prior_present.get(key) else None)
+        override.updated_at = datetime.now(UTC)
+        if all(getattr(override, field, None) is None for field in req_fact_fields()):
+            ctx.db.delete(override)
+        return
     if ownership.get("storage") == "node":
         state = get_state(ctx.db, ctx.workspace, change_set.state_id)
         updated = list(state.nodes)

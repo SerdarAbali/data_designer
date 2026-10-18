@@ -26,6 +26,10 @@ type Props<NodeType extends Node, EdgeType extends Edge> = {
   defaultViewport?: Viewport;
   onViewportChange?: (viewport: Viewport) => void;
   onNodeClick?: (node: NodeType) => void;
+  onNodeMouseEnter?: (node: NodeType) => void;
+  onNodeMouseLeave?: () => void;
+  onEdgeMouseEnter?: (edge: EdgeType) => void;
+  onEdgeMouseLeave?: () => void;
   onPaneClick?: () => void;
   onNodeDragStop?: (nodeId: string, position: { x: number; y: number }) => void;
   toolbar?: ReactNode;
@@ -48,6 +52,10 @@ export default function InformationProjectionCanvas<NodeType extends Node, EdgeT
   defaultViewport,
   onViewportChange,
   onNodeClick,
+  onNodeMouseEnter,
+  onNodeMouseLeave,
+  onEdgeMouseEnter,
+  onEdgeMouseLeave,
   onPaneClick,
   onNodeDragStop,
   toolbar,
@@ -80,6 +88,10 @@ export default function InformationProjectionCanvas<NodeType extends Node, EdgeT
           setFlowNodes((current) => applyNodeChanges(changes, current));
         }}
         onNodeClick={(_event, node) => onNodeClick?.(node)}
+        onNodeMouseEnter={(_event, node) => onNodeMouseEnter?.(node)}
+        onNodeMouseLeave={() => onNodeMouseLeave?.()}
+        onEdgeMouseEnter={(_event, edge) => onEdgeMouseEnter?.(edge)}
+        onEdgeMouseLeave={() => onEdgeMouseLeave?.()}
         onPaneClick={onPaneClick}
         onNodeDragStop={(_event, node) => onNodeDragStop?.(node.id, node.position)}
         defaultViewport={defaultViewport}
@@ -88,6 +100,7 @@ export default function InformationProjectionCanvas<NodeType extends Node, EdgeT
         nodesConnectable={false}
         edgesFocusable={false}
         deleteKeyCode={null}
+        proOptions={{ hideAttribution: true }}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.2}

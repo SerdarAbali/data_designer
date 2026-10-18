@@ -35,6 +35,13 @@ class WorkspaceResponse(BaseModel):
 
 DemoPreset = Literal["full", "solution_integration", "integration_only"]
 
+#: How a new workspace starts its Current baseline.
+#: ``current_draft`` captures the existing architecture into an editable Current
+#: state that the user locks when it is ready. ``candidate_starter`` starts the
+#: same editable Current draft and adds an editable Candidate alongside it. A new
+#: manual workspace never starts with a locked Current.
+BaselineMode = Literal["current_draft", "candidate_starter"]
+
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
@@ -42,6 +49,7 @@ class WorkspaceCreate(BaseModel):
     disciplines: Disciplines = Field(default_factory=lambda: list(DEFAULT_DISCIPLINES))
     seed_demo_data: bool = False
     demo_preset: DemoPreset | None = None
+    baseline: BaselineMode = "current_draft"
 
 
 class WorkspaceUpdate(BaseModel):

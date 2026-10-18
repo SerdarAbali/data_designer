@@ -2,6 +2,7 @@ import React from "react";
 import NewWorkspaceModal, { type DemoPreset } from "./NewWorkspaceModal";
 import WorkspaceDisciplinesModal from "./WorkspaceDisciplinesModal";
 import type { ArchitectureDiscipline, WorkspaceInfo } from "../../architectureTypes";
+import type { InitialArchitectureState } from "../../workspace/disciplineScope";
 
 type WorkspaceSwitcherProps = {
   currentWorkspaceName: string;
@@ -10,6 +11,8 @@ type WorkspaceSwitcherProps = {
   onDisciplinesUpdated?: () => void;
   beforeSwitch?: () => Promise<boolean>;
   onTransitionChange?: (active: boolean) => void;
+  onExport?: () => void;
+  exportDisabled?: boolean;
 };
 
 async function apiWs<T>(path: string, csrf: () => string, init: RequestInit = {}): Promise<T> {
@@ -39,6 +42,8 @@ export default function WorkspaceSwitcher({
   onDisciplinesUpdated,
   beforeSwitch,
   onTransitionChange,
+  onExport,
+  exportDisabled,
 }: WorkspaceSwitcherProps) {
   const detailsRef = React.useRef<HTMLDetailsElement>(null);
   const lastOpen = React.useRef(false);
@@ -116,21 +121,25 @@ export default function WorkspaceSwitcher({
     description: string,
     demoPreset: DemoPreset | null,
     disciplines: ArchitectureDiscipline[],
+    initialState: InitialArchitectureState,
   ) {
     setCreating(true);
     onTransitionChange?.(true);
     try {
       if (beforeSwitch && !await beforeSwitch()) throw new Error("Resolve the pending save before creating a workspace.");
-      await apiWs<WorkspaceInfo>("/api/workspaces", csrfToken, {
+      const created = await apiWs<WorkspaceInfo>("/api/workspaces", csrfToken, {
         method: "POST",
         body: JSON.stringify({
           name,
           description: description || null,
           seed_demo_data: false,
           demo_preset: demoPreset,
+          baseline: initialState === "candidate" ? "candidate_starter" : "current_draft",
           disciplines,
         }),
       });
+      // The server creates the baseline states in the same transaction: a draft
+      // Current for capture, or a locked Current plus an editable Candidate.
       await loadWorkspaces();
       setShowNewModal(false);
       if (detailsRef.current) detailsRef.current.open = false;
@@ -243,7 +252,7 @@ export default function WorkspaceSwitcher({
         <summary aria-label="Switch workspace" className="ws-switcher-trigger">
           <span className="ws-switcher-icon" aria-hidden="true">⊞</span>
           <span className="ws-switcher-label">
-            <span className="ws-switcher-name">
+            <span className="ws-switcher-name" title={active.name}>
               {active.name}
               {activeWorkspace?.demo_preset && <span className="ws-demo-badge">Demo</span>}
             </span>
@@ -365,6 +374,19 @@ export default function WorkspaceSwitcher({
             >
               + New Workspace
             </button>
+            {onExport && (
+              <button
+                type="button"
+                className="ws-new-btn"
+                disabled={exportDisabled}
+                onClick={() => {
+                  if (detailsRef.current) detailsRef.current.open = false;
+                  void onExport();
+                }}
+              >
+                ↑ Share workspace
+              </button>
+            )}
           </div>
         </div>
       </details>

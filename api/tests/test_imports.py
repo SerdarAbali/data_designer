@@ -21,6 +21,7 @@ from app.models import (
     Tenant,
     User,
 )
+from tests.baseline_support import lock_baseline
 
 
 @pytest.fixture()
@@ -926,13 +927,15 @@ def test_include_objects_enriches_current_state_with_selection(client) -> None:
     assert repeat.json()["added_occurrences"] == 0
     assert repeat.json()["added_relationships"] == 0
 
-    # The Current state is still read-only through the general update path.
+    # Once the baseline is locked, the general update path is read-only again.
+    lock_baseline(test_client, workspace_id, current_id, csrf_headers(test_client))
     blocked = test_client.put(
         f"/api/workspaces/{workspace_id}/states/{current_id}",
         json={"description": "Attempted edit"},
         headers=csrf_headers(test_client),
     )
     assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "current_baseline_locked"
 
 
 def test_undo_can_be_retried_after_the_blocking_reference_is_removed(client) -> None:

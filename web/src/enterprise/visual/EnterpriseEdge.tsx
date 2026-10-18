@@ -7,7 +7,9 @@ import {
 
 import {
   buildRoute,
-  labelPoint,
+  estimateLabelSize,
+  labelAnchor,
+  labelObstacles,
   roundedOrthogonalPath,
   toFlowSide,
   type Rect,
@@ -20,6 +22,14 @@ export type EnterpriseEdgeData = {
   obstacles?: Rect[];
   sourceRect?: Rect;
   targetRect?: Rect;
+  /** Corridor lane, so connectors sharing a corridor do not overlap. */
+  laneShift?: number;
+  /** Staggered vertical offset applied to parallel-edge labels so they don't stack. */
+  laneOffset?: number;
+  /** Dimmed while another connection on the canvas is being traced. */
+  dimmed?: boolean;
+  /** The connection the pointer is on: drawn heavier so it reads as the path. */
+  emphasized?: boolean;
 };
 
 export type EnterpriseFlowEdge = Edge<EnterpriseEdgeData, "enterpriseEdge">;
@@ -45,9 +55,14 @@ export default function EnterpriseEdge({
     0,
     undefined,
     { source: data?.sourceRect, target: data?.targetRect },
+    data?.laneShift ?? 0,
   );
   const path = roundedOrthogonalPath(points);
-  const anchor = labelPoint(points);
+  const anchor = labelAnchor(
+    points,
+    labelObstacles(data?.obstacles, data?.sourceRect, data?.targetRect),
+    estimateLabelSize(data?.label ?? ""),
+  );
   const color =
     data?.type === "supports" || data?.type === "satisfies"
       ? "var(--discipline-solution)"
@@ -58,14 +73,24 @@ export default function EnterpriseEdge({
         id={id}
         path={path}
         markerEnd={markerEnd}
-        style={{ stroke: color, strokeWidth: selected ? 2.2 : 1.4 }}
+        style={{
+          stroke: color,
+          strokeWidth: selected || data?.emphasized ? 2.2 : 1.4,
+          opacity: data?.dimmed ? 0.14 : 1,
+        }}
         interactionWidth={18}
       />
       {data?.label && (
         <EdgeLabelRenderer>
           <div
-            className={`enterprise-edge-label${selected ? " selected" : ""}`}
-            style={{ transform: `translate(-50%, -50%) translate(${anchor.x}px, ${anchor.y}px)` }}
+            className={`enterprise-edge-label${selected || data?.emphasized ? " selected" : ""}${
+              data?.dimmed ? " dimmed" : ""
+            }`}
+            style={{
+              transform: `translate(-50%, -50%) translate(${anchor.x}px, ${
+                anchor.y + (data?.laneOffset ?? 0)
+              }px)`,
+            }}
           >
             {data.label}
           </div>

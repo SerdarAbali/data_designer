@@ -16,6 +16,7 @@ from app.architecture.schemas import (
     ArchitectureStateRelationship,
     ArchitectureStateResponse,
 )
+from app.architecture.state_scope import assert_writable
 from app.auth.dependencies import (
     AuthenticatedUser,
     get_auth_session,
@@ -188,11 +189,8 @@ def create_architecture_object(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Architecture state not found",
         )
-    if state.state_type == "current":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Current architecture state is read-only",
-        )
+    # The one Current write policy lives in state_scope; no local rule here.
+    assert_writable(state)
 
     if payload.kind == "information_object":
         if not payload.owner or not payload.owner.strip():

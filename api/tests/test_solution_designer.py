@@ -12,6 +12,7 @@ from app import main
 from app.auth.security import hash_password
 from app.db import Base, get_session
 from app.models import ArchitectureState, Tenant, User
+from tests.baseline_support import lock_baseline
 
 DEMO_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "solution-designer" / "demo.json"
 
@@ -241,6 +242,7 @@ def test_solution_candidate_isolation(client):
     solution_id = design["solution"]["solution_object_id"]
     _create_component(test_client, headers, workspace_id, solution_id, candidate["id"], "Worker")
 
+    lock_baseline(test_client, workspace_id, current["id"], headers)
     current_design = test_client.get(
         f"{_solution(workspace_id, solution_id)}/design",
         params={"state_id": current["id"]},

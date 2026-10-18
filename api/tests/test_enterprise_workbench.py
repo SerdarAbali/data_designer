@@ -13,6 +13,7 @@ from app.architecture.schemas import EnterpriseObjectCreate, EnterpriseObjectRes
 from app.auth.security import hash_password
 from app.db import Base, get_session
 from app.models import ArchitectureRelationship, ArchitectureState, Tenant, User, Workspace
+from tests.baseline_support import lock_baseline
 
 DEMO_PATH = (
     Path(__file__).resolve().parents[2] / "fixtures" / "enterprise-architecture" / "demo.json"
@@ -211,6 +212,8 @@ def test_enterprise_object_crud_and_isolation(client):
     assert len(role_model["principles"]) == 1
     assert len(role_model["roles"]) == 1
 
+    # Current stays read-only only once its baseline is locked.
+    lock_baseline(test_client, workspace_id, current["id"], headers)
     current_model = test_client.get(
         f"{_discipline(workspace_id)}/model",
         params={"state_id": current["id"]},

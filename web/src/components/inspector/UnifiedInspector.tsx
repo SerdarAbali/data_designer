@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { SaveStatus } from "../architecture/ArchitectureTopBar";
 
@@ -24,12 +24,21 @@ type Props = {
   panels: InspectorPanel[];
   defaultTab?: string;
   footer?: ReactNode;
+  actions?: ReactNode;
+  manageMenu?: ReactNode;
+};
+
+const SAVE_LABELS: Record<Exclude<SaveStatus, "idle">, string> = {
+  saving: "Saving…",
+  saved: "Saved",
+  error: "Save failed",
 };
 
 /**
  * One responsive inspector shell for object properties, relationships and
- * traceability. Desktop width is ~360px; the body scrolls internally instead of
- * scrolling the page, and at constrained widths it becomes an overlay drawer.
+ * traceability. Uses the shared side-panel contract: sticky header, local body
+ * scrolling, predictable action/footer area, bounded width, and an overlay
+ * drawer at narrow widths.
  */
 export default function UnifiedInspector({
   ariaLabel,
@@ -46,35 +55,118 @@ export default function UnifiedInspector({
   panels,
   defaultTab,
   footer,
+  actions,
+  manageMenu,
 }: Props) {
   const [tab, setTab] = useState(defaultTab ?? panels[0]?.id ?? "");
+  const [manageOpen, setManageOpen] = useState(false);
+  const manageRoot = useRef<HTMLDivElement>(null);
+  const manageTrigger = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef<HTMLElement | null>(null);
+
   const active = panels.some((panel) => panel.id === tab) ? tab : panels[0]?.id ?? "";
 
+  // Restore focus to the element that opened the inspector when it unmounts.
+  useEffect(() => {
+    restoreFocus.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      const previous = restoreFocus.current;
+      if (previous && previous.isConnected && previous !== document.body) {
+        previous.focus();
+      }
+    };
+  }, []);
+
+  // Manage menu: outside click, Escape, and focus return.
+  useEffect(() => {
+    if (!manageOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!manageRoot.current?.contains(event.target as Node)) {
+        setManageOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setManageOpen(false);
+        manageTrigger.current?.focus();
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [manageOpen]);
+
+  const saveChip =
+    saveStatus && saveStatus !== "idle" ? (
+      <span
+        className={`side-panel-context-chip is-${saveStatus}`}
+        data-save-status={saveStatus}
+        role="status"
+        aria-live="polite"
+      >
+        {SAVE_LABELS[saveStatus]}
+      </span>
+    ) : null;
+
   return (
-    <aside className="architecture-relationship-panel unified-inspector" aria-label={ariaLabel}>
-      <header>
-        <div>
+    <aside
+      className="architecture-relationship-panel unified-inspector side-panel"
+      aria-label={ariaLabel}
+    >
+      <header className="side-panel-header unified-inspector-header">
+        <div className="side-panel-heading">
           <p className="eyebrow">{eyebrow}</p>
-          <h3>{title}</h3>
+          <h3 className="side-panel-title unified-inspector-title">{title}</h3>
+          {(stateName !== undefined || status || saveChip) && (
+            <div className="side-panel-context">
+              {stateName !== undefined && (
+                <span className="side-panel-context-chip" title="Architecture state">
+                  {stateName}
+                </span>
+              )}
+              {status && (
+                <span
+                  className={`side-panel-context-chip${status.toLowerCase().includes("read-only") ? " is-readonly" : ""}`}
+                >
+                  {status}
+                </span>
+              )}
+              {saveChip}
+            </div>
+          )}
+          {identifier && (
+            <code className="side-panel-id" title={identifier}>
+              {identifier}
+            </code>
+          )}
         </div>
-        <div className="studio-inspector-actions">
-          <button type="button" className="secondary-button" aria-label={collapseLabel} onClick={onCollapse}>
+        <div className="side-panel-controls studio-inspector-actions">
+          <button
+            type="button"
+            className="side-panel-icon-button"
+            aria-label={collapseLabel}
+            title={collapseLabel}
+            onClick={onCollapse}
+          >
             ›
           </button>
-          <button type="button" className="secondary-button" aria-label={closeLabel} onClick={onClose}>
+          <button
+            type="button"
+            className="side-panel-icon-button"
+            aria-label={closeLabel}
+            title={closeLabel}
+            onClick={onClose}
+          >
             ✕
           </button>
         </div>
       </header>
-      {stateName !== undefined && (
-        <p className="studio-inspector-state">
-          {stateName} · {status} <span>{saveStatus === "idle" ? "" : saveStatus}</span>
-        </p>
-      )}
-      {identifier && (
-        <small className="studio-object-identifier" title={identifier}>{identifier}</small>
-      )}
-      <nav className="unified-inspector-tabs" aria-label="Inspector sections">
+
+      <nav className="side-panel-tabs unified-inspector-tabs" aria-label="Inspector sections">
         {panels.map((panel) => (
           <button
             key={panel.id}
@@ -88,14 +180,51 @@ export default function UnifiedInspector({
           </button>
         ))}
       </nav>
-      <div className="unified-inspector-body">
+
+      <div className="side-panel-scroll unified-inspector-body">
         {panels.map((panel) => (
           <div key={panel.id} className="unified-inspector-panel" hidden={active !== panel.id}>
             {panel.content}
           </div>
         ))}
       </div>
-      {footer && <div className="unified-inspector-footer">{footer}</div>}
+
+      {(actions || manageMenu) && (
+        <div className="inspector-actions-row side-panel-actions">
+          {actions}
+          {manageMenu && (
+            <div className="inspector-manage-menu" ref={manageRoot}>
+              <button
+                type="button"
+                ref={manageTrigger}
+                className="inspector-manage-trigger"
+                aria-expanded={manageOpen}
+                aria-haspopup="menu"
+                aria-label="Manage object"
+                onClick={() => setManageOpen((open) => !open)}
+              >
+                Manage ⌄
+              </button>
+              <section
+                className="more-menu-panel"
+                role="menu"
+                aria-label="Manage object"
+                hidden={!manageOpen}
+                onClick={(event) => {
+                  if ((event.target as HTMLElement).closest("button")) {
+                    setManageOpen(false);
+                    manageTrigger.current?.focus();
+                  }
+                }}
+              >
+                {manageMenu}
+              </section>
+            </div>
+          )}
+        </div>
+      )}
+
+      {footer && <div className="unified-inspector-footer side-panel-footer">{footer}</div>}
     </aside>
   );
 }

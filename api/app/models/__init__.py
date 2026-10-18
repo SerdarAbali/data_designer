@@ -18,6 +18,7 @@ from app.models.architecture_object import (
     OrganizationRole,
     SolutionBoundary,
     SolutionComponent,
+    SolutionIntegration,
     SolutionMember,
     TrustBoundary,
 )
@@ -37,6 +38,7 @@ from app.models.assistant import (
 )
 from app.models.auth import AuthSession, Tenant, User
 from app.models.catalog import CatalogField, CatalogObject, CatalogSystem
+from app.models.evidence import EVIDENCE_TARGET_FIELDS, ArchitectureEvidence
 from app.models.helper_action import (
     CHANGE_SET_STATUSES,
     HelperAuditEvent,
@@ -44,11 +46,26 @@ from app.models.helper_action import (
     HelperChangeSet,
 )
 from app.models.import_batch import ImportBatch, ImportRowResult
-from app.models.integration import Integration, IntegrationDependency, IntegrationFieldRef
+from app.models.integration import (
+    Integration,
+    IntegrationDependency,
+    IntegrationFieldRef,
+    IntegrationStateOverride,
+)
 from app.models.scenario import Scenario
-from app.models.workspace import ArchitectureState, Workspace
+from app.models.workspace import (
+    BASELINE_DRAFT,
+    BASELINE_LOCKED,
+    BASELINE_STATUSES,
+    ArchitectureState,
+    Workspace,
+)
 
 __all__ = [
+    "ArchitectureEvidence",
+    "BASELINE_DRAFT",
+    "BASELINE_LOCKED",
+    "BASELINE_STATUSES",
     "ArchitectureState",
     "ArchitectureInterface",
     "ArchitectureObject",
@@ -73,6 +90,7 @@ __all__ = [
     "CREDENTIAL_STATUSES",
     "DataRepository",
     "DeploymentNode",
+    "EVIDENCE_TARGET_FIELDS",
     "HelperAuditEvent",
     "HelperChangeOperation",
     "HelperChangeSet",
@@ -81,6 +99,7 @@ __all__ = [
     "Integration",
     "IntegrationDependency",
     "IntegrationFieldRef",
+    "IntegrationStateOverride",
     "InformationAttribute",
     "InformationObject",
     "InterfaceOperation",
@@ -92,6 +111,7 @@ __all__ = [
     "SENSITIVE_CLASSIFICATIONS",
     "SolutionBoundary",
     "SolutionComponent",
+    "SolutionIntegration",
     "SolutionMember",
     "Tenant",
     "TOOL_CALL_STATUSES",

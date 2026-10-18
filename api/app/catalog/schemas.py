@@ -13,6 +13,12 @@ from pydantic import (
     model_validator,
 )
 
+from app.architecture.vocabulary import (
+    EnvironmentScope,
+    LifecycleStage,
+    OperationalStatus,
+)
+
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Description = Annotated[str | None, Field(max_length=2000)]
@@ -68,6 +74,9 @@ class SystemCreate(CatalogInput):
     external_identifier: str | None = Field(default=None, max_length=255)
     position: dict[str, float] | None = None
     binding_state: ShortText = "unbound"
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
 
     @field_validator("position")
     @classmethod
@@ -88,6 +97,9 @@ class SystemUpdate(CatalogInput):
     external_identifier: str | None = Field(default=None, max_length=255)
     position: dict[str, float] | None = None
     binding_state: ShortText | None = None
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
 
     @model_validator(mode="after")
     def has_changes(self) -> "SystemUpdate":
@@ -117,6 +129,9 @@ class SystemResponse(CatalogResponse):
     external_identifier: str | None
     position: dict[str, float] | None
     binding_state: str
+    lifecycle_stage: LifecycleStage | None = None
+    operational_status: OperationalStatus | None = None
+    environment_scope: EnvironmentScope | None = None
     created_at: str
     updated_at: str
 

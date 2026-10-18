@@ -277,6 +277,7 @@ describe("EnterpriseWorkbench", () => {
   it("auto arrange persists a layered layout", async () => {
     const { mutateActive } = renderWorkbench();
     await screen.findByText("Grow revenue");
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
     fireEvent.click(screen.getByRole("button", { name: "Auto arrange" }));
     await waitFor(() => expect(mutateActive).toHaveBeenCalled());
     const mutate = mutateActive.mock.calls.at(-1)![0] as (state: ArchitectureState) => ArchitectureState;
@@ -302,8 +303,9 @@ describe("EnterpriseWorkbench", () => {
   it("creates an enterprise object through the API", async () => {
     renderWorkbench();
     await screen.findByText("Grow revenue");
-    fireEvent.change(screen.getByLabelText("New object name"), { target: { value: "Reduce risk" } });
-    fireEvent.click(screen.getByRole("button", { name: "+ Add object" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ New object" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Reduce risk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => {
       const post = vi.mocked(fetch).mock.calls.find(
         ([path, init]) => String(path).includes("/enterprise/objects") && init?.method === "POST",
@@ -316,7 +318,8 @@ describe("EnterpriseWorkbench", () => {
   it("keeps the current state read-only", async () => {
     renderWorkbench({ editable: false });
     await screen.findByText("Grow revenue");
-    expect(screen.getByRole("button", { name: "+ Add object" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "+ New object" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
     expect(screen.getByRole("button", { name: "Auto arrange" })).toHaveProperty("disabled", true);
   });
 });

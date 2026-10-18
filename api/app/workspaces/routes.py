@@ -3,8 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.architecture.state_scope import BASELINE_DRAFT, BASELINE_LOCKED
 from app.auth.dependencies import (
     AuthenticatedUser,
     get_auth_session,
@@ -13,7 +15,20 @@ from app.auth.dependencies import (
 )
 from app.db import get_session
 from app.demo import PRESETS, generate_demo, reset_demo
-from app.models import AuthSession, Tenant, User, Workspace
+from app.models import (
+    ArchitectureState,
+    AuthSession,
+    Tenant,
+    User,
+    Workspace,
+)
+from app.workspaces.bundle import (
+    BundleError,
+    export_workspace_bundle,
+    fork_workspace,
+    import_workspace_bundle,
+    validate_bundle,
+)
 from app.workspaces.schemas import (
     WorkspaceCreate,
     WorkspaceFork,
@@ -21,10 +36,7 @@ from app.workspaces.schemas import (
     WorkspaceUpdate,
 )
 from app.workspaces.service import (
-    export_workspace_bundle,
-    fork_workspace,
     get_workspace_counts,
-    import_workspace_bundle,
     seed_demo_data_for_tenant,
 )
 
@@ -179,6 +191,15 @@ def create_workspace(
         seed_demo_data_for_tenant(db, new_tenant.id)
     if payload.demo_preset is not None:
         generate_demo(db, new_ws, payload.demo_preset)
+        # A demo provides Current *content*, so its Current state is a captured
+        # baseline and keeps the historical read-only protection. The baseline
+        # choice applies to workspaces that start empty.
+        _lock_provided_baseline(db, new_ws)
+    elif payload.baseline == "candidate_starter":
+        _create_candidate_starter(db, new_ws)
+    # ``current_draft`` needs nothing here: Current is materialised on first read
+    # by the existing initializer, which also captures the Catalog systems that
+    # exist by then. It starts as a draft, so it opens editable.
 
     # Switch session to new workspace
     auth_session.active_tenant_id = new_tenant.id
@@ -187,6 +208,49 @@ def create_workspace(
     db.refresh(new_ws)
 
     return _workspace_response(db, new_tenant, new_ws, is_active=True)
+
+
+def _create_candidate_starter(db: Session, workspace: Workspace) -> None:
+    """The Candidate-starter option: an editable Current draft plus a Candidate.
+
+    Both states are created eagerly so the workspace opens with somewhere to
+    design *and* somewhere to capture. Current is a draft, exactly like the
+    Current-baseline option: it becomes read-only only when a human locks it, so
+    a new manual workspace never starts with an empty locked baseline.
+    """
+    from app.architecture.routes import auto_initialize_current_state
+
+    auto_initialize_current_state(db, workspace, baseline_status=BASELINE_DRAFT)
+    now = datetime.now(UTC)
+    db.add(
+        ArchitectureState(
+            workspace_id=workspace.id,
+            name="Candidate Design",
+            state_type="candidate",
+            description="Editable Candidate design.",
+            nodes=[],
+            relationships=[],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db.commit()
+
+
+def _lock_provided_baseline(db: Session, workspace: Workspace) -> None:
+    """Mark a generated Current (demo content) as a captured, locked baseline."""
+    current = db.scalar(
+        select(ArchitectureState).where(
+            ArchitectureState.workspace_id == workspace.id,
+            ArchitectureState.state_type == "current",
+            ArchitectureState.deleted_at.is_(None),
+        )
+    )
+    if current is None:
+        return
+    if current.baseline_status is None:
+        current.baseline_status = BASELINE_LOCKED
+    db.commit()
 
 
 @router.patch("/{workspace_id}", response_model=WorkspaceResponse)
@@ -318,13 +382,34 @@ def fork_workspace_endpoint(
     db.add(new_tenant)
     db.flush()
 
-    fork_workspace(db, source_tenant.id, new_tenant)
-
-    source_ws = _ensure_workspace_entity(db, source_tenant)
-    fork_disciplines = (
-        payload.disciplines if payload.disciplines is not None else source_ws.disciplines
-    )
-    fork_ws = _ensure_workspace_entity(db, new_tenant, disciplines=fork_disciplines)
+    # The source workspace is never written to: its disciplines travel in the
+    # serialised bundle unless the caller overrides them.
+    try:
+        fork_ws = fork_workspace(
+            db,
+            source_tenant.id,
+            new_tenant,
+            disciplines=list(payload.disciplines) if payload.disciplines is not None else None,
+            actor_user_id=user.id,
+        )
+    except BundleError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=error.as_detail(),
+        ) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "fork_conflict",
+                "message": "The source workspace could not be copied cleanly",
+            },
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 
     # Switch session to new fork
     auth_session.active_tenant_id = new_tenant.id
@@ -354,14 +439,23 @@ def import_workspace_endpoint(
     db: Session = Depends(get_session),  # noqa: B008
 ) -> WorkspaceResponse:
     require_csrf(request, auth_session)
-    if payload.get("format") != "data-designer-workspace":
+
+    # Validate the whole bundle before anything is written so a rejection is
+    # actionable and leaves no partial workspace behind.
+    problems = validate_bundle(payload)
+    if problems:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid workspace format (expected 'data-designer-workspace')",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_bundle",
+                "message": problems[0]["message"],
+                "problems": problems[:20],
+                "problem_count": len(problems),
+            },
         )
 
-    ws_info = payload.get("workspace", {})
-    base_name = ws_info.get("name", "Imported Workspace").strip()
+    ws_info = payload.get("workspace", {}) or {}
+    base_name = (ws_info.get("name") or "Imported Workspace").strip() or "Imported Workspace"
     import_name = base_name
     counter = 1
     while db.scalar(select(Tenant).where(Tenant.name == import_name, Tenant.deleted_at.is_(None))):
@@ -376,15 +470,28 @@ def import_workspace_endpoint(
     db.add(new_tenant)
     db.flush()
 
-    import_workspace_bundle(db, new_tenant, payload)
-
-    import_disciplines = ws_info.get("disciplines") or [
-        "enterprise",
-        "information",
-        "solution",
-        "integration",
-    ]
-    imported_ws = _ensure_workspace_entity(db, new_tenant, disciplines=import_disciplines)
+    try:
+        imported_ws = import_workspace_bundle(db, new_tenant, payload, actor_user_id=user.id)
+    except BundleError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=error.as_detail(),
+        ) from error
+    except IntegrityError as error:
+        # A last-resort guard: anything the validator could not see (a database
+        # constraint) still rolls the whole import back and stays actionable.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "import_conflict",
+                "message": "The bundle conflicts with an existing record",
+            },
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 
     auth_session.active_tenant_id = new_tenant.id
     db.commit()
